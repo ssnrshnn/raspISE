@@ -32,6 +32,10 @@ rsync -a --delete \
 info "Updating Python dependencies…"
 "$VENV/bin/pip" install --quiet -r "$RASPISE_DIR/requirements.txt"
 
+info "Installing/updating systemd service units…"
+cp "$RASPISE_DIR/systemd/raspise.service"         /etc/systemd/system/raspise.service
+cp "$RASPISE_DIR/systemd/raspise-display.service" /etc/systemd/system/raspise-display.service
+
 info "Restarting raspise service…"
 systemctl daemon-reload
 systemctl restart raspise
