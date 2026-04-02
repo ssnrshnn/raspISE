@@ -18,14 +18,16 @@ instead of talking to hardware.  This lets you develop / test on a desktop.
 
 Hardware wiring (ILI9341 via SPI0)
 ------------------------------------
-  Display VCC  → Pi 3.3 V  (pin 17)
-  Display GND  → Pi GND    (pin 20)
-  Display CS   → Pi CE0    (pin 24, GPIO 8)
-  Display RESET → Pi GPIO 25 (pin 22)
-  Display D/C  → Pi GPIO 24 (pin 18)
-  Display SDI  → Pi MOSI   (pin 19, GPIO 10)
-  Display SCK  → Pi SCLK   (pin 23, GPIO 11)
-  Display LED  → Pi GPIO 18 (optional PWM backlight)
+  Display Pin  │ Pi Physical Pin  │ GPIO
+  ─────────────┼──────────────────┼──────────────────────────────
+  VCC          │ Pin 1 or 17      │ 3.3 V   ── use 3.3 V, NOT 5 V
+  GND          │ Pin 6, 9 or 25   │ GND
+  CS           │ Pin 24           │ GPIO 8  (SPI0 CE0)
+  DC           │ Pin 18           │ GPIO 24 (Data/Command)
+  RST          │ Pin 22           │ GPIO 25 (Reset)
+  SDA          │ Pin 19           │ GPIO 10 (SPI0 MOSI)
+  SCK          │ Pin 23           │ GPIO 11 (SPI0 SCLK)
+  LED/BL       │ Pin 12           │ GPIO 18 (optional PWM backlight)
 """
 from __future__ import annotations
 
