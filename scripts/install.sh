@@ -75,6 +75,9 @@ python3 -m venv "$VENV"
 info "Installing Python dependencies (this may take several minutes on Pi Zero 2W)…"
 "$VENV/bin/pip" install --quiet -r "$RASPISE_DIR/requirements.txt"
 
+info "Installing RaspISE package (creates entry-point scripts)…"
+"$VENV/bin/pip" install --quiet --no-deps "$RASPISE_DIR"
+
 # Pi-specific display libraries
 info "Installing Pi display libraries…"
 "$VENV/bin/pip" install --quiet \

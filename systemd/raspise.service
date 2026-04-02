@@ -1,8 +1,10 @@
 [Unit]
 Description=RaspISE — Network Access Control Server
-Documentation=https://github.com/you/raspise
+Documentation=https://github.com/ssnrshnn/raspISE
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60s
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -23,8 +25,6 @@ ExecReload=/bin/kill -HUP $MAINPID
 # Restart policy
 Restart=on-failure
 RestartSec=5s
-StartLimitIntervalSec=60s
-StartLimitBurst=5
 
 # Logging
 StandardOutput=journal
