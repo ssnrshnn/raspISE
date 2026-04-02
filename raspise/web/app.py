@@ -44,14 +44,15 @@ import os
 import subprocess
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, Form, Request, status as http_status
+import httpx
+from fastapi import Depends, FastAPI, Form, Request, Response, status as http_status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from raspise.api.auth import hash_password, verify_password
+from raspise.api.auth import create_access_token, hash_password, verify_password
 from raspise.config import get_config
 from raspise.db import get_db
 from raspise.db.models import (
@@ -805,7 +806,8 @@ async def system_page(request: Request, db: AsyncSession = Depends(get_db)):
     try:
         import os as _os
         cfg = get_config()
-        db_path = cfg.database.path
+        # cfg.database.url is like "sqlite+aiosqlite:////var/lib/raspise/raspise.db"
+        db_path = cfg.database.url.split("sqlite+aiosqlite:///")[-1]
         if _os.path.exists(db_path):
             db_size = _os.path.getsize(db_path)
     except Exception:
@@ -841,3 +843,53 @@ async def restart_service(service_name: str, request: Request):
     except Exception:
         pass
     return RedirectResponse(url="/system", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# API proxy — forward /api/v1/* to the REST API on port 8081
+# ---------------------------------------------------------------------------
+# Browser JS calls fetch('/api/v1/...') relative to this server (:8080).
+# We proxy those requests to http://localhost:8081/api/v1/... an inject a
+# short-lived Bearer token derived from the web session cookie, so the user
+# doesn't need to separately log into the REST API.
+# ---------------------------------------------------------------------------
+
+@app.api_route(
+    "/api/v1/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+async def api_proxy(path: str, request: Request):
+    username = _get_session_user(request)
+    if not username:
+        return Response(
+            content='{"detail":"Not authenticated"}',
+            status_code=401,
+            media_type="application/json",
+        )
+
+    cfg     = get_config()
+    api_url = f"http://127.0.0.1:{cfg.api.port}/api/v1/{path}"
+    token   = create_access_token(username, expire_minutes=5)
+
+    # Forward query params and body
+    params  = dict(request.query_params)
+    body    = await request.body()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type":  request.headers.get("Content-Type", "application/json"),
+    }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.request(
+            method  = request.method,
+            url     = api_url,
+            params  = params,
+            content = body,
+            headers = headers,
+        )
+
+    return Response(
+        content    = resp.content,
+        status_code= resp.status_code,
+        media_type = resp.headers.get("content-type", "application/json"),
+    )

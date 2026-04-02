@@ -68,7 +68,7 @@ portal:
 # ── Device Profiler ───────────────────────────────────────────────────────────
 profiler:
   enabled: true
-  listen_interface: "eth0"   # interface for DHCP/ARP sniffing
+  listen_interface: "wlan0"   # Pi Zero 2W has no eth0 — use wlan0 or usb0
   oui_db: "/var/lib/raspise/oui.csv"
 
 # ── TFT Display ───────────────────────────────────────────────────────────────

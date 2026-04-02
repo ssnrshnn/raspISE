@@ -41,7 +41,9 @@
           <td>
             <button class="btn btn-sm btn-outline-danger"
                     hx-delete="/api/v1/users/{{ u.id }}"
-                    onclick="return confirm('Delete user {{ u.username }}?')">
+                    hx-confirm="Delete user {{ u.username }}?"
+                    hx-target="closest tr"
+                    hx-swap="outerHTML swap:0.2s">
               <i class="bi bi-trash"></i>
             </button>
           </td>

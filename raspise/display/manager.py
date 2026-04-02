@@ -294,7 +294,7 @@ class DisplayDriver:
                 dc   = self._dc_pin
                 spi  = self._spi
                 GPIO.output(dc, GPIO.LOW);  spi.xfer2([0x2A])
-                GPIO.output(dc, GPIO.HIGH); spi.xfer2([0x00, 0x00, 0x00, pw - 1])
+                GPIO.output(dc, GPIO.HIGH); spi.xfer2([0x00, 0x00, (pw-1)>>8, (pw-1)&0xFF])
                 GPIO.output(dc, GPIO.LOW);  spi.xfer2([0x2B])
                 GPIO.output(dc, GPIO.HIGH); spi.xfer2([0x00, 0x00, (ph-1)>>8, (ph-1)&0xFF])
                 GPIO.output(dc, GPIO.LOW);  spi.xfer2([0x2C])

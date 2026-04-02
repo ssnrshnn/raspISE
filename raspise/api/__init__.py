@@ -13,7 +13,10 @@ def create_api_app() -> FastAPI:
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:8080"],
+        # Proxy on :8080 calls us from 127.0.0.1; allow that origin plus
+        # direct browser access from the local network.
+        allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"],
+        allow_origin_regex=r"http://192\.168\.\d+\.\d+:8080",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

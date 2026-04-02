@@ -156,6 +156,23 @@ class DeviceProfiler:
         t.start()
         log.info("Device profiler started on interface %s", self._iface)
 
+    def _resolve_iface(self) -> str:
+        """Return configured interface if it exists, else first non-loopback interface."""
+        import psutil
+        stats = psutil.net_if_stats()
+        if self._iface in stats:
+            return self._iface
+        # Fall back to first active non-loopback interface
+        for iface, st in stats.items():
+            if iface != "lo" and st.isup:
+                log.warning(
+                    "Interface %r not found — profiler using %r instead. "
+                    "Update profiler.listen_interface in config.yaml.",
+                    self._iface, iface,
+                )
+                return iface
+        return self._iface  # last resort: return original (will fail gracefully in scapy)
+
     def stop(self) -> None:
         self._running = False
 
@@ -168,7 +185,7 @@ class DeviceProfiler:
 
         try:
             sniff(
-                iface=self._iface,
+                iface=self._resolve_iface(),
                 filter="udp port 67 or 68 or arp",
                 prn=self._process_packet,
                 store=False,
