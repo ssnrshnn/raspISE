@@ -51,14 +51,21 @@ chown raspise:raspise /etc/raspise 2>/dev/null || true
 chown raspise:raspise /etc/raspise/config.yaml 2>/dev/null || true
 chmod 600 /etc/raspise/config.yaml 2>/dev/null || true
 
-# Ensure sudoers rule is in place for service restart button
-cat > /etc/sudoers.d/raspise << 'EOF'
-# RaspISE — allow the service user to restart only its own services
-raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart raspise
-raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart raspise-display
-raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart freeradius
+# Ensure polkit rule is current (replaces the old sudoers approach)
+mkdir -p /etc/polkit-1/rules.d
+cat > /etc/polkit-1/rules.d/10-raspise.rules << 'EOF'
+polkit.addRule(function(action, subject) {
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+            (action.lookup("unit") === "raspise.service" ||
+             action.lookup("unit") === "raspise-display.service") &&
+            subject.user === "raspise") {
+        return polkit.Result.YES;
+    }
+});
 EOF
-chmod 440 /etc/sudoers.d/raspise
+chmod 644 /etc/polkit-1/rules.d/10-raspise.rules
+# Remove old sudoers rule if present
+rm -f /etc/sudoers.d/raspise
 
 info "Restarting raspise service…"
 systemctl daemon-reload

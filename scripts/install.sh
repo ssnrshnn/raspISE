@@ -104,15 +104,22 @@ fi
 chown "$RASPISE_USER:$RASPISE_USER" "$CONFIG_DIR/config.yaml"
 chmod 600 "$CONFIG_DIR/config.yaml"
 
-# ─── Sudoers rule — allow raspise user to restart only known services ─────────
-info "Installing sudoers rule…"
-cat > /etc/sudoers.d/raspise << 'EOF'
-# RaspISE — allow the service user to restart only its own services
-raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart raspise
-raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart raspise-display
-raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart freeradius
+# ─── Polkit rule — allow raspise user to restart its own services via DBus ────
+# sudo cannot work inside a systemd unit with a restricted CapabilityBoundingSet
+# (no CAP_SETUID/CAP_SETGID).  Polkit / systemctl-over-DBus is the proper way.
+info "Installing polkit rule…"
+mkdir -p /etc/polkit-1/rules.d
+cat > /etc/polkit-1/rules.d/10-raspise.rules << 'EOF'
+polkit.addRule(function(action, subject) {
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+            (action.lookup("unit") === "raspise.service" ||
+             action.lookup("unit") === "raspise-display.service") &&
+            subject.user === "raspise") {
+        return polkit.Result.YES;
+    }
+});
 EOF
-chmod 440 /etc/sudoers.d/raspise
+chmod 644 /etc/polkit-1/rules.d/10-raspise.rules
 
 # ─── 8. Download OUI database ─────────────────────────────────────────────────
 info "Downloading IEEE OUI database…"

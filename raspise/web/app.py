@@ -40,6 +40,8 @@ Routes
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -770,10 +772,17 @@ async def system_page(request: Request, db: AsyncSession = Depends(get_db)):
     for svc in ("raspise", "raspise-display", "freeradius"):
         try:
             result = subprocess.run(
-                ["systemctl", "is-active", svc],
+                ["systemctl", "show", "--property=LoadState,ActiveState", svc],
                 capture_output=True, text=True, timeout=2
             )
-            status = result.stdout.strip()
+            props: dict[str, str] = {}
+            for line in result.stdout.strip().splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    props[k] = v
+            if props.get("LoadState") == "not-found":
+                continue  # Service not installed on this system
+            status = props.get("ActiveState", "unknown")
         except Exception:
             status = "unknown"
         services.append({"name": svc, "status": status})
@@ -789,7 +798,9 @@ async def system_page(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         log_lines = ["(journalctl unavailable — running outside systemd?)"]
 
-    cpu_percent  = psutil.cpu_percent(interval=0.2)
+    cpu_percent  = await asyncio.get_event_loop().run_in_executor(
+        None, functools.partial(psutil.cpu_percent, interval=1)
+    )
     mem          = psutil.virtual_memory()
     disk         = psutil.disk_usage("/")
     temperature  = None
@@ -835,11 +846,13 @@ async def system_page(request: Request, db: AsyncSession = Depends(get_db)):
 async def restart_service(service_name: str, request: Request):
     _require_auth(request)
     # Only allow known service names to prevent command injection
-    allowed = {"raspise", "raspise-display", "freeradius"}
+    allowed = {"raspise", "raspise-display"}
     if service_name not in allowed:
         return RedirectResponse(url="/system", status_code=303)
     try:
-        subprocess.run(["sudo", "systemctl", "restart", service_name], timeout=10, check=False)
+        # No sudo — polkit rule in /etc/polkit-1/rules.d/10-raspise.rules grants
+        # the raspise user permission to restart these services via DBus.
+        subprocess.run(["systemctl", "restart", service_name], timeout=10, check=False)
     except Exception:
         pass
     return RedirectResponse(url="/system", status_code=303)
