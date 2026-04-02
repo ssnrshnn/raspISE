@@ -59,6 +59,7 @@ from raspise.api.auth import (
 from raspise.api.schemas import (
     ActiveSessionOut, AuthLogOut, DashboardStats,
     GroupCreate, GroupOut,
+    GuestSessionCreate, GuestSessionOut,
     LoginRequest, PolicyCreate, PolicyOut, PolicyUpdate,
     StatusResponse, TokenResponse,
     UserCreate, UserOut, UserUpdate,
@@ -438,7 +439,40 @@ async def terminate_session(
 
 
 # ---------------------------------------------------------------------------
-# Dashboard
+# Guest Sessions (admin management)
+# ---------------------------------------------------------------------------
+
+@router.post("/guests", response_model=GuestSessionOut, status_code=201, tags=["Guests"])
+async def create_guest_session(
+    body: GuestSessionCreate,
+    db:   AsyncSession = Depends(get_db),
+    _:    AdminUser    = Depends(get_current_admin),
+):
+    from datetime import timedelta
+    from raspise.core.utils import generate_token, normalise_mac, utcnow
+
+    mac = ""
+    if body.mac_address:
+        try:
+            mac = normalise_mac(body.mac_address)
+        except ValueError:
+            raise HTTPException(400, "Invalid MAC address format")
+
+    expires_at = utcnow() + timedelta(hours=max(1, min(body.duration_hours, 168)))
+    session = GuestSession(
+        token       = generate_token(32),
+        full_name   = body.full_name.strip()[:128],
+        email       = (body.email or "").strip().lower()[:128],
+        mac_address = mac,
+        ip_address  = "",
+        expires_at  = expires_at,
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    return GuestSessionOut.model_validate(session)
+
+
 # ---------------------------------------------------------------------------
 
 @router.get("/dashboard", response_model=DashboardStats, tags=["Dashboard"])

@@ -213,3 +213,25 @@ class DashboardStats(BaseModel):
     auth_success_today: int
     auth_failure_today: int
     guest_sessions_active: int
+
+
+# ---------------------------------------------------------------------------
+# Guest session (manual admin creation)
+# ---------------------------------------------------------------------------
+
+class GuestSessionCreate(BaseModel):
+    full_name:      str
+    email:          str | None = None
+    mac_address:    str | None = None
+    duration_hours: int        = 8
+
+
+class GuestSessionOut(BaseModel):
+    id:          int
+    full_name:   str
+    email:       str
+    mac_address: str
+    expires_at:  datetime
+    active:      bool
+
+    model_config = {"from_attributes": True}

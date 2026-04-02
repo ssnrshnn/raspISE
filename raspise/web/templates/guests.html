@@ -3,6 +3,18 @@
 {% block page_title %}Guest Sessions{% endblock %}
 
 {% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <span class="text-muted small">Guest portal runs on port {{ portal_url.split(':')[-1] }} — guests register there to get network access.</span>
+  <div class="d-flex gap-2">
+    <a href="{{ portal_url }}" target="_blank" class="btn btn-sm btn-outline-info">
+      <i class="bi bi-box-arrow-up-right me-1"></i>Open Guest Portal
+    </a>
+    <button class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#createGuestModal">
+      <i class="bi bi-plus-circle me-1"></i>Create Manual Session
+    </button>
+  </div>
+</div>
+
 <div class="card">
   <div class="table-responsive">
     <table class="table table-hover mb-0 small align-middle">
@@ -35,4 +47,66 @@
     </table>
   </div>
 </div>
+
+<!-- Create Manual Guest Session Modal -->
+<div class="modal fade" id="createGuestModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Create Manual Guest Session</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Full Name *</label>
+          <input type="text" class="form-control" id="g_name" placeholder="Jane Smith">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Email</label>
+          <input type="email" class="form-control" id="g_email" placeholder="jane@example.com">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">MAC Address</label>
+          <input type="text" class="form-control font-monospace" id="g_mac"
+                 placeholder="aa:bb:cc:dd:ee:ff" pattern="[0-9a-fA-F:]{17}">
+          <div class="form-text">Optional — leave blank if unknown.</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Duration (hours)</label>
+          <input type="number" class="form-control" id="g_hours" value="8" min="1" max="168" style="max-width:120px">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-info" onclick="createGuest()">Create Session</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function createGuest() {
+  const name = document.getElementById('g_name').value.trim();
+  if (!name) { alert('Full name is required'); return; }
+  const body = {
+    full_name:      name,
+    email:          document.getElementById('g_email').value.trim() || null,
+    mac_address:    document.getElementById('g_mac').value.trim()   || null,
+    duration_hours: parseInt(document.getElementById('g_hours').value) || 8,
+  };
+  const r = await fetch('/api/v1/guests', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  if (r.ok) {
+    location.reload();
+  } else {
+    const err = await r.json().catch(() => ({}));
+    alert('Error: ' + (err.detail || r.status));
+  }
+}
+</script>
 {% endblock %}

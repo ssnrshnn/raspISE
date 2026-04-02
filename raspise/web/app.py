@@ -297,12 +297,17 @@ async def sessions_page(request: Request, db: AsyncSession = Depends(get_db)):
 @app.get("/guests", response_class=HTMLResponse)
 async def guests_page(request: Request, db: AsyncSession = Depends(get_db)):
     user = _require_auth(request)
+    cfg  = get_config()
     rows = (await db.execute(
         select(GuestSession).order_by(GuestSession.created_at.desc()).limit(100)
     )).scalars().all()
     now = datetime.now(timezone.utc)
+    # Build portal URL using the same host but portal port
+    portal_host = request.headers.get("host", "").split(":")[0] or "localhost"
+    portal_url  = f"http://{portal_host}:{cfg.portal.port}"
     return templates.TemplateResponse(request, "guests.html", {
         "request": request, "user": user, "sessions": rows, "now": now,
+        "portal_url": portal_url,
     })
 
 

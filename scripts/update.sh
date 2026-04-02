@@ -51,6 +51,15 @@ chown raspise:raspise /etc/raspise 2>/dev/null || true
 chown raspise:raspise /etc/raspise/config.yaml 2>/dev/null || true
 chmod 600 /etc/raspise/config.yaml 2>/dev/null || true
 
+# Migrate old portal config keys (renamed in v1.1)
+# session_duration_hours → session_hours, wifi_ssid → guest_ssid, wifi_password → guest_psk
+CFG=/etc/raspise/config.yaml
+if [[ -f "$CFG" ]]; then
+  sed -i 's/session_duration_hours:/session_hours:/g' "$CFG"
+  sed -i 's/wifi_ssid:/guest_ssid:/g' "$CFG"
+  sed -i 's/wifi_password:/guest_psk:/g' "$CFG"
+fi
+
 # Ensure polkit rule is current (replaces the old sudoers approach)
 mkdir -p /etc/polkit-1/rules.d
 cat > /etc/polkit-1/rules.d/10-raspise.rules << 'EOF'
