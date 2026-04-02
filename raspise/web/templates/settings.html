@@ -3,6 +3,12 @@
 {% block page_title %}System Settings{% endblock %}
 
 {% block content %}
+{% if request.query_params.get('error') %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert">
+  <i class="bi bi-exclamation-triangle-fill me-1"></i>{{ request.query_params.get('error') }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
 {% if request.query_params.get('saved') %}
 <div class="alert alert-success alert-dismissible fade show" role="alert">
   Settings saved. <strong>Restart the service</strong> for changes to take effect.

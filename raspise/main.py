@@ -30,6 +30,10 @@ from raspise.web import web_app
 
 log = get_logger(__name__)
 
+# Guard so background services (RADIUS, TACACS+, profiler) start exactly once
+# even though _lifespan is shared across 3 concurrent uvicorn apps.
+_services_started = False
+
 
 # ---------------------------------------------------------------------------
 # DB bootstrap — seed admin user + default policies on first run
@@ -123,6 +127,7 @@ def _start_profiler(loop: asyncio.AbstractEventLoop) -> None:
 
 @asynccontextmanager
 async def _lifespan(_app):
+    global _services_started
     # ── Startup ──────────────────────────────────────────────────────
     setup_logging()
     cfg  = get_config()
@@ -135,23 +140,26 @@ async def _lifespan(_app):
     await init_db()
     await _seed_database()
 
-    # TACACS+
-    if cfg.tacacs.enabled:
-        from raspise.tacacs import run_tacacs_server
-        asyncio.ensure_future(run_tacacs_server())
+    if not _services_started:
+        _services_started = True
 
-    # RADIUS (blocking UDP server — needs its own thread)
-    _start_radius_thread(loop)
+        # TACACS+
+        if cfg.tacacs.enabled:
+            from raspise.tacacs import run_tacacs_server
+            asyncio.ensure_future(run_tacacs_server())
 
-    # Device profiler
-    _start_profiler(loop)
+        # RADIUS (blocking UDP server — needs its own thread)
+        _start_radius_thread(loop)
 
-    # Publish system-start event
-    await bus.publish(Event(EventType.SYSTEM_START, data={"node": cfg.server.name}))
+        # Device profiler
+        _start_profiler(loop)
 
-    log.info("Admin UI  → http://localhost:%d", cfg.web.port)
-    log.info("REST API  → http://localhost:%d/api/v1/docs", cfg.api.port)
-    log.info("Portal    → http://localhost:%d", cfg.portal.port)
+        # Publish system-start event
+        await bus.publish(Event(EventType.SYSTEM_START, data={"node": cfg.server.name}))
+
+        log.info("Admin UI  → http://localhost:%d", cfg.web.port)
+        log.info("REST API  → http://localhost:%d/api/v1/docs", cfg.api.port)
+        log.info("Portal    → http://localhost:%d", cfg.portal.port)
 
     yield
 

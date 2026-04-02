@@ -66,6 +66,9 @@ _BASE = os.path.dirname(__file__)
 templates = Jinja2Templates(directory=os.path.join(_BASE, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(_BASE, "static")), name="static")
 
+import json as _json
+templates.env.filters["from_json"] = _json.loads
+
 
 # ---------------------------------------------------------------------------
 # Session cookie helper (lightweight — no external session library needed)
@@ -401,8 +404,14 @@ async def settings_save(request: Request):
                 headers[k.strip()] = v.strip()
         wh["headers"] = headers
 
-    with open(cfg_path, "w") as f:
-        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+    try:
+        with open(cfg_path, "w") as f:
+            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+    except OSError as _exc:
+        return RedirectResponse(
+            url=f"/settings?error=Cannot+write+config+(read-only+filesystem)",
+            status_code=303,
+        )
 
     # Invalidate cached config so next request re-reads it
     from raspise.config import get_config as _gc
