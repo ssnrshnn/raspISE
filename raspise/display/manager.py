@@ -146,15 +146,54 @@ class DisplayDriver:
             self._sim_path.mkdir(parents=True, exist_ok=True)
 
     def _init_ili9341(self, cfg) -> None:
-        import board, busio, digitalio
-        from adafruit_ili9341 import ILI9341
+        """
+        Minimal ILI9341 driver over raw spidev + RPi.GPIO.
+        Works regardless of adafruit-circuitpython-ili9341 version.
+        """
+        import spidev
+        import RPi.GPIO as GPIO
 
-        spi = busio.SPI(clock=board.SCK, MOSI=board.MOSI, MISO=board.MISO)
-        cs  = digitalio.DigitalInOut(getattr(board, f"D{8}"))
-        dc  = digitalio.DigitalInOut(getattr(board, f"D{cfg.dc_pin}"))
-        rst = digitalio.DigitalInOut(getattr(board, f"D{cfg.rst_pin}"))
-        self._device = ILI9341(spi, cs=cs, dc=dc, rst=rst, rotation=cfg.rotation)
-        log.info("ILI9341 display initialised (rotation=%d)", cfg.rotation)
+        # ── GPIO setup ───────────────────────────────────────────────
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+        GPIO.setup(cfg.dc_pin,  GPIO.OUT)
+        GPIO.setup(cfg.rst_pin, GPIO.OUT)
+
+        # Hardware reset
+        GPIO.output(cfg.rst_pin, GPIO.HIGH); time.sleep(0.01)
+        GPIO.output(cfg.rst_pin, GPIO.LOW);  time.sleep(0.10)
+        GPIO.output(cfg.rst_pin, GPIO.HIGH); time.sleep(0.12)
+
+        # ── SPI setup ────────────────────────────────────────────────
+        spi = spidev.SpiDev()
+        spi.open(0, 0)                  # bus 0, CE0 = GPIO 8 = CS pin
+        spi.max_speed_hz = 32_000_000
+        spi.mode = 0
+
+        # ── Store handles on self so show() can reach them ───────────
+        self._spi     = spi
+        self._gpio    = GPIO
+        self._dc_pin  = cfg.dc_pin
+        self._rst_pin = cfg.rst_pin
+
+        # ── ILI9341 init sequence ────────────────────────────────────
+        def cmd(c, data=None):
+            GPIO.output(cfg.dc_pin, GPIO.LOW)
+            spi.xfer2([c])
+            if data:
+                GPIO.output(cfg.dc_pin, GPIO.HIGH)
+                for i in range(0, len(data), 4096):
+                    spi.xfer2(data[i:i + 4096])
+
+        cmd(0x01)           ; time.sleep(0.15)   # Software reset
+        cmd(0x11)           ; time.sleep(0.12)   # Sleep out
+        cmd(0x3A, [0x55])                         # 16-bit RGB565 pixels
+        madctl = {0: 0x48, 90: 0x28, 180: 0x88, 270: 0xE8}.get(cfg.rotation, 0x48)
+        cmd(0x36, [madctl])                       # Memory Access Control / rotation
+        cmd(0x13)                                  # Normal display mode on
+        cmd(0x29)                                  # Display on
+
+        log.info("ILI9341 display initialised via spidev (rotation=%d)", cfg.rotation)
 
     def _init_st7789(self, cfg) -> None:
         import st7789
@@ -177,13 +216,30 @@ class DisplayDriver:
             img.save(self._sim_path / "current.png")
             return
 
-        if self._device is None:
-            return
-
         try:
             if self._driver == "ili9341":
                 import numpy as np
-                self._device.image(img)
+                # Convert PIL RGB → RGB565 big-endian, then push as raw bytes
+                arr = np.array(img.convert("RGB"), dtype=np.uint16)
+                rgb565 = (
+                    ((arr[..., 0] & 0xF8) << 8) |
+                    ((arr[..., 1] & 0xFC) << 3) |
+                    ( arr[..., 2]         >> 3)
+                ).byteswap().flatten().tobytes()
+                # Full-frame window
+                self._gpio.output(self._dc_pin, self._gpio.LOW)
+                self._spi.xfer2([0x2A])                      # CASET
+                self._gpio.output(self._dc_pin, self._gpio.HIGH)
+                self._spi.xfer2([0x00, 0x00, 0x00, W - 1])
+                self._gpio.output(self._dc_pin, self._gpio.LOW)
+                self._spi.xfer2([0x2B])                      # PASET
+                self._gpio.output(self._dc_pin, self._gpio.HIGH)
+                self._spi.xfer2([0x00, 0x00, (H - 1) >> 8, (H - 1) & 0xFF])
+                self._gpio.output(self._dc_pin, self._gpio.LOW)
+                self._spi.xfer2([0x2C])                      # RAMWR
+                self._gpio.output(self._dc_pin, self._gpio.HIGH)
+                for i in range(0, len(rgb565), 4096):
+                    self._spi.xfer2(list(rgb565[i:i + 4096]))
             elif self._driver == "st7789":
                 self._device.display(img)
         except Exception as exc:
