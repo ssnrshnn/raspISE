@@ -37,9 +37,7 @@ apt-get install -y -qq \
   libssl-dev libffi-dev \
   gcc g++ git curl \
   iptables iptables-persistent \
-  # SPI / GPIO for TFT display
   python3-spidev python3-rpi.gpio \
-  # Font for TFT rendering
   fonts-dejavu-core
 
 # ─── 2. SPI enable ────────────────────────────────────────────────────────────
