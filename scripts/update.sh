@@ -18,7 +18,12 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
 info "Pulling latest code from git…"
 cd "$REPO_DIR"
-git pull
+if git rev-parse --git-dir > /dev/null 2>&1; then
+  git pull
+else
+  warn "REPO_DIR ($REPO_DIR) is not a git repository — skipping git pull."
+  warn "Run this script from your local clone: sudo bash ~/raspISE/scripts/update.sh"
+fi
 
 info "Syncing source to $RASPISE_DIR…"
 rsync -a --delete \
