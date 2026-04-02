@@ -105,7 +105,7 @@ async def _redirect_to_login(request: Request, exc: RedirectToLogin):
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: str = ""):
-    return templates.TemplateResponse("login.html", {"request": request, "error": error})
+    return templates.TemplateResponse(request, "login.html", {"request": request, "error": error})
 
 
 @app.post("/login")
@@ -130,6 +130,7 @@ async def do_login(
         return resp
 
     return templates.TemplateResponse(
+        request,
         "login.html",
         {"request": request, "error": "Invalid username or password."},
         status_code=401,
@@ -182,7 +183,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     )).scalars().all()
 
     cfg = get_config()
-    return templates.TemplateResponse("dashboard.html", {
+    return templates.TemplateResponse(request, "dashboard.html", {
         "request":     request,
         "user":        user,
         "stats":       stats,
@@ -203,7 +204,7 @@ async def users_page(request: Request, db: AsyncSession = Depends(get_db)):
         select(User).options(selectinload(User.group)).order_by(User.username)
     )).scalars().all()
     groups = (await db.execute(select(Group).order_by(Group.name))).scalars().all()
-    return templates.TemplateResponse("users.html", {
+    return templates.TemplateResponse(request, "users.html", {
         "request": request, "user": user,
         "users": rows, "groups": groups,
     })
@@ -219,7 +220,7 @@ async def devices_page(request: Request, db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(
         select(Device).order_by(Device.last_seen.desc()).limit(200)
     )).scalars().all()
-    return templates.TemplateResponse("devices.html", {
+    return templates.TemplateResponse(request, "devices.html", {
         "request": request, "user": user, "devices": rows,
     })
 
@@ -235,7 +236,7 @@ async def policies_page(request: Request, db: AsyncSession = Depends(get_db)):
         select(Policy).order_by(Policy.priority)
     )).scalars().all()
     groups = (await db.execute(select(Group))).scalars().all()
-    return templates.TemplateResponse("policies.html", {
+    return templates.TemplateResponse(request, "policies.html", {
         "request": request, "user": user, "policies": rows, "groups": groups,
     })
 
@@ -261,7 +262,7 @@ async def logs_page(
     total = (await db.execute(
         select(func.count()).select_from(AuthLog)
     )).scalar_one()
-    return templates.TemplateResponse("auth_logs.html", {
+    return templates.TemplateResponse(request, "auth_logs.html", {
         "request": request, "user": user, "logs": rows,
         "page": page, "per_page": per_page, "total": total,
         "filter_result": result,
@@ -278,7 +279,7 @@ async def sessions_page(request: Request, db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(
         select(ActiveSession).order_by(ActiveSession.started_at.desc())
     )).scalars().all()
-    return templates.TemplateResponse("sessions.html", {
+    return templates.TemplateResponse(request, "sessions.html", {
         "request": request, "user": user, "sessions": rows,
     })
 
@@ -294,7 +295,7 @@ async def guests_page(request: Request, db: AsyncSession = Depends(get_db)):
         select(GuestSession).order_by(GuestSession.created_at.desc()).limit(100)
     )).scalars().all()
     now = datetime.now(timezone.utc)
-    return templates.TemplateResponse("guests.html", {
+    return templates.TemplateResponse(request, "guests.html", {
         "request": request, "user": user, "sessions": rows, "now": now,
     })
 
@@ -307,7 +308,7 @@ async def guests_page(request: Request, db: AsyncSession = Depends(get_db)):
 async def settings_page(request: Request):
     user = _require_auth(request)
     cfg  = get_config()
-    return templates.TemplateResponse("settings.html", {
+    return templates.TemplateResponse(request, "settings.html", {
         "request": request, "user": user, "cfg": cfg,
     })
 
@@ -448,7 +449,7 @@ async def groups_page(request: Request, db: AsyncSession = Depends(get_db)):
             select(func.count()).select_from(User).where(User.group_id == g.id)
         )).scalar_one()
         counts[g.id] = c
-    return templates.TemplateResponse("groups.html", {
+    return templates.TemplateResponse(request, "groups.html", {
         "request": request, "user": user, "groups": rows, "counts": counts,
         "saved": request.query_params.get("saved"),
         "error": request.query_params.get("error"),
@@ -497,7 +498,7 @@ async def tacacs_logs_page(
     stmt = stmt.offset((page - 1) * per_page).limit(per_page)
     rows = (await db.execute(stmt)).scalars().all()
     total = (await db.execute(select(func.count()).select_from(TacacsLog))).scalar_one()
-    return templates.TemplateResponse("tacacs_logs.html", {
+    return templates.TemplateResponse(request, "tacacs_logs.html", {
         "request": request, "user": user, "logs": rows,
         "page": page, "per_page": per_page, "total": total,
     })
@@ -527,7 +528,7 @@ async def delete_session(session_id: int, request: Request, db: AsyncSession = D
 async def radius_clients_page(request: Request, db: AsyncSession = Depends(get_db)):
     user = _require_auth(request)
     rows = (await db.execute(select(NasClient).order_by(NasClient.name))).scalars().all()
-    return templates.TemplateResponse("radius_clients.html", {
+    return templates.TemplateResponse(request, "radius_clients.html", {
         "request": request, "user": user, "clients": rows,
         "saved": request.query_params.get("saved"),
         "error": request.query_params.get("error"),
@@ -586,7 +587,7 @@ async def toggle_radius_client(
 async def tacacs_clients_page(request: Request, db: AsyncSession = Depends(get_db)):
     user = _require_auth(request)
     rows = (await db.execute(select(TacacsClient).order_by(TacacsClient.name))).scalars().all()
-    return templates.TemplateResponse("tacacs_clients.html", {
+    return templates.TemplateResponse(request, "tacacs_clients.html", {
         "request": request, "user": user, "clients": rows,
         "saved": request.query_params.get("saved"),
         "error": request.query_params.get("error"),
@@ -645,7 +646,7 @@ async def toggle_tacacs_client(
 async def vlans_page(request: Request, db: AsyncSession = Depends(get_db)):
     user = _require_auth(request)
     rows = (await db.execute(select(VlanMapping).order_by(VlanMapping.vlan_id))).scalars().all()
-    return templates.TemplateResponse("vlans.html", {
+    return templates.TemplateResponse(request, "vlans.html", {
         "request": request, "user": user, "vlans": rows,
         "saved": request.query_params.get("saved"),
         "error": request.query_params.get("error"),
@@ -687,7 +688,7 @@ async def delete_vlan(vlan_id: int, request: Request, db: AsyncSession = Depends
 async def admin_users_page(request: Request, db: AsyncSession = Depends(get_db)):
     user = _require_auth(request)
     rows = (await db.execute(select(AdminUser).order_by(AdminUser.username))).scalars().all()
-    return templates.TemplateResponse("admin_users.html", {
+    return templates.TemplateResponse(request, "admin_users.html", {
         "request": request, "user": user, "admins": rows,
         "saved": request.query_params.get("saved"),
         "error": request.query_params.get("error"),
@@ -803,7 +804,7 @@ async def system_page(request: Request, db: AsyncSession = Depends(get_db)):
 
     total_logs = (await db.execute(select(func.count()).select_from(AuthLog))).scalar_one()
 
-    return templates.TemplateResponse("system.html", {
+    return templates.TemplateResponse(request, "system.html", {
         "request":      request,
         "user":         user,
         "services":     services,

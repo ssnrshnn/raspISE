@@ -37,43 +37,50 @@ log = get_logger(__name__)
 
 async def _seed_database() -> None:
     from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
     from raspise.db.models import AdminUser, Policy, PolicyAction
     from raspise.api.auth import hash_password
 
     cfg = get_config()
 
     async with AsyncSessionLocal() as db:
-        # Admin user
-        existing = (await db.execute(
-            select(AdminUser).where(AdminUser.username == cfg.web.admin_username)
-        )).scalar_one_or_none()
-        if not existing:
-            admin = AdminUser(
-                username      = cfg.web.admin_username,
-                password_hash = hash_password(cfg.web.admin_password),
-                is_superuser  = True,
-                enabled       = True,
-            )
-            db.add(admin)
-            log.info("Created default admin user: %s", cfg.web.admin_username)
+        # Disable autoflush so pending INSERTs don't fire during SELECTs;
+        # multiple app lifespans may race here — IntegrityError on commit is OK.
+        with db.sync_session.no_autoflush:
+            # Admin user
+            existing = (await db.execute(
+                select(AdminUser).where(AdminUser.username == cfg.web.admin_username)
+            )).scalar_one_or_none()
+            if not existing:
+                admin = AdminUser(
+                    username      = cfg.web.admin_username,
+                    password_hash = hash_password(cfg.web.admin_password),
+                    is_superuser  = True,
+                    enabled       = True,
+                )
+                db.add(admin)
+                log.info("Created default admin user: %s", cfg.web.admin_username)
 
-        # Default permit-all policy (lowest priority — catch-all)
-        existing_policy = (await db.execute(
-            select(Policy).where(Policy.name == "Default-Permit-All")
-        )).scalar_one_or_none()
-        if not existing_policy:
-            db.add(Policy(
-                name        = "Default-Permit-All",
-                description = "Catch-all: permit any authenticated request",
-                priority    = 9999,
-                conditions  = "[]",
-                action      = PolicyAction.PERMIT,
-                vlan        = cfg.radius.default_vlan,
-                enabled     = True,
-            ))
-            log.info("Created default catch-all policy")
+            # Default permit-all policy (lowest priority — catch-all)
+            existing_policy = (await db.execute(
+                select(Policy).where(Policy.name == "Default-Permit-All")
+            )).scalar_one_or_none()
+            if not existing_policy:
+                db.add(Policy(
+                    name        = "Default-Permit-All",
+                    description = "Catch-all: permit any authenticated request",
+                    priority    = 9999,
+                    conditions  = "[]",
+                    action      = PolicyAction.PERMIT,
+                    vlan        = cfg.radius.default_vlan,
+                    enabled     = True,
+                ))
+                log.info("Created default catch-all policy")
 
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()  # another lifespan instance seeded first; that's fine
 
 
 # ---------------------------------------------------------------------------

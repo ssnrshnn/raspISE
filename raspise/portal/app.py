@@ -73,7 +73,7 @@ def _get_client_mac(request: Request) -> str:
 async def landing(request: Request):
     cfg = get_config().portal
     mac = _get_client_mac(request)
-    return templates.TemplateResponse("portal.html", {
+    return templates.TemplateResponse(request, "portal.html", {
         "request":  request,
         "mac":      mac,
         "ssid":     cfg.guest_ssid,
@@ -93,13 +93,13 @@ async def register(
 
     # Basic input validation
     if not full_name.strip() or len(full_name) > 128:
-        return templates.TemplateResponse("portal.html", {
+        return templates.TemplateResponse(request, "portal.html", {
             "request": request, "mac": mac, "ssid": cfg.guest_ssid,
             "error": "Please enter your full name.",
             "redirect": "",
         })
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-        return templates.TemplateResponse("portal.html", {
+        return templates.TemplateResponse(request, "portal.html", {
             "request": request, "mac": mac, "ssid": cfg.guest_ssid,
             "error": "Please enter a valid email address.",
             "redirect": "",
@@ -158,7 +158,7 @@ async def success(request: Request, token: str = "", qr: str = ""):
         img.save(buf, format="PNG")
         qr_base64 = base64.b64encode(buf.getvalue()).decode()
 
-    return templates.TemplateResponse("success.html", {
+    return templates.TemplateResponse(request, "success.html", {
         "request":   request,
         "ssid":      cfg.guest_ssid,
         "qr_base64": qr_base64,
