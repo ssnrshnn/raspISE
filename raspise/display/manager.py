@@ -172,9 +172,10 @@ class DisplayDriver:
         spi.bits_per_word = 8
 
         # ── Store handles ─────────────────────────────────────────────
-        self._spi    = spi
-        self._gpio   = GPIO
-        self._dc_pin = cfg.dc_pin
+        self._spi      = spi
+        self._gpio     = GPIO
+        self._dc_pin   = cfg.dc_pin
+        self._rotation = cfg.rotation
 
         # ── Command helper ────────────────────────────────────────────
         def _c(cmd, *data):
@@ -198,8 +199,11 @@ class DisplayDriver:
         _c(0xC1, 0x10)                          # Power Control 2
         _c(0xC5, 0x3E, 0x28)                    # VCOM Control 1
         _c(0xC7, 0x86)                          # VCOM Control 2
+        # MADCTL controls the panel scan direction.
+        # For 90°/270° (landscape), the controller's column addr range is 0..319
+        # and row addr range is 0..239 — PIL image must be 320×240.
         madctl = {0: 0x48, 90: 0x28, 180: 0x88, 270: 0xE8}.get(cfg.rotation, 0x48)
-        _c(0x36, madctl)                        # Memory Access Control / rotation
+        _c(0x36, madctl)                        # Memory Access Control
         _c(0x3A, 0x55)                          # Pixel Format: 16-bit RGB565
         _c(0xB1, 0x00, 0x18)                    # Frame Rate: ~73 Hz
         _c(0xB6, 0x08, 0x82, 0x27)             # Display Function Control
@@ -221,21 +225,25 @@ class DisplayDriver:
 
     def _ili_fill(self, color: int) -> None:
         """Fill the entire ILI9341 frame buffer with a 16-bit RGB565 colour."""
-        GPIO = self._gpio
-        dc   = self._dc_pin
-        spi  = self._spi
+        GPIO  = self._gpio
+        dc    = self._dc_pin
+        spi   = self._spi
+        rot   = getattr(self, "_rotation", 0)
+        # For landscape MADCTL (90°/270°) controller sees 320 cols × 240 rows
+        cw = H if rot in (90, 270) else W
+        rh = W if rot in (90, 270) else H
         hi, lo = (color >> 8) & 0xFF, color & 0xFF
 
         def _c(cmd, *data):
             GPIO.output(dc, GPIO.LOW);  spi.xfer2([cmd])
             if data: GPIO.output(dc, GPIO.HIGH); spi.xfer2(list(data))
 
-        _c(0x2A, 0x00, 0x00, 0x00, W - 1)
-        _c(0x2B, 0x00, 0x00, (H - 1) >> 8, (H - 1) & 0xFF)
+        _c(0x2A, 0x00, 0x00, 0x00, cw - 1)
+        _c(0x2B, 0x00, 0x00, (rh - 1) >> 8, (rh - 1) & 0xFF)
         GPIO.output(dc, GPIO.LOW);  spi.xfer2([0x2C])
         GPIO.output(dc, GPIO.HIGH)
-        row = [hi, lo] * W
-        for _ in range(H):
+        row = [hi, lo] * cw
+        for _ in range(rh):
             spi.xfer2(row)
 
     def _init_st7789(self, cfg) -> None:
@@ -262,6 +270,20 @@ class DisplayDriver:
         try:
             if self._driver == "ili9341":
                 import numpy as np
+                rot = getattr(self, "_rotation", 0)
+                # Rotate PIL image to match physical panel orientation.
+                # Screens always render 240×320; for landscape we transpose
+                # the pixel data so the controller sees cw×rh pixels.
+                if rot == 90:
+                    # 90° CW: transpose then flip horizontally → PIL rotate(-90)
+                    img = img.rotate(-90, expand=True)
+                elif rot == 180:
+                    img = img.rotate(180)
+                elif rot == 270:
+                    # 270° CW: transpose then flip vertically → PIL rotate(90)
+                    img = img.rotate(90, expand=True)
+                # After PIL rotation: 90/270 → 320×240; 0/180 → 240×320
+                pw, ph = img.size          # pixel width / height to send
                 arr    = np.array(img.convert("RGB"), dtype=np.uint16)
                 rgb565 = (
                     ((arr[..., 0] & 0xF8) << 8) |
@@ -272,15 +294,15 @@ class DisplayDriver:
                 dc   = self._dc_pin
                 spi  = self._spi
                 GPIO.output(dc, GPIO.LOW);  spi.xfer2([0x2A])
-                GPIO.output(dc, GPIO.HIGH); spi.xfer2([0x00, 0x00, 0x00, W - 1])
+                GPIO.output(dc, GPIO.HIGH); spi.xfer2([0x00, 0x00, 0x00, pw - 1])
                 GPIO.output(dc, GPIO.LOW);  spi.xfer2([0x2B])
-                GPIO.output(dc, GPIO.HIGH); spi.xfer2([0x00, 0x00, (H-1)>>8, (H-1)&0xFF])
+                GPIO.output(dc, GPIO.HIGH); spi.xfer2([0x00, 0x00, (ph-1)>>8, (ph-1)&0xFF])
                 GPIO.output(dc, GPIO.LOW);  spi.xfer2([0x2C])
                 GPIO.output(dc, GPIO.HIGH)
                 for i in range(0, len(rgb565), 4096):
                     spi.xfer2(list(rgb565[i:i + 4096]))
                 if frame_no % 10 == 0:
-                    log.debug("ILI9341 frame %d pushed (%d bytes)", frame_no, len(rgb565))
+                    log.debug("ILI9341 frame %d pushed (%d bytes, rot=%d)", frame_no, len(rgb565), rot)
             elif self._driver == "st7789":
                 self._device.display(img)
         except Exception as exc:
