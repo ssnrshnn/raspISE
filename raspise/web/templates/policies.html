@@ -79,14 +79,15 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <div class="row g-3">
-          <div class="col-md-6">
+        <div class="row g-3 mb-3">
+          <div class="col-md-5">
             <label class="form-label">Name *</label>
-            <input type="text" class="form-control" id="p_name" required>
+            <input type="text" class="form-control" id="p_name" required placeholder="Allow Employees">
           </div>
-          <div class="col-md-3">
-            <label class="form-label">Priority (low=first)</label>
+          <div class="col-md-2">
+            <label class="form-label">Priority</label>
             <input type="number" class="form-control" id="p_priority" value="100" min="1" max="9999">
+            <div class="form-text">Low = first</div>
           </div>
           <div class="col-md-3">
             <label class="form-label">Action</label>
@@ -96,17 +97,21 @@
               <option value="GUEST">Guest</option>
             </select>
           </div>
-          <div class="col-md-3">
-            <label class="form-label">VLAN (optional)</label>
+          <div class="col-md-2">
+            <label class="form-label">VLAN</label>
             <input type="number" class="form-control" id="p_vlan" min="1" max="4094" placeholder="10">
-          </div>
-          <div class="col-12">
-            <label class="form-label">Conditions (JSON)</label>
-            <textarea class="form-control font-monospace small" id="p_conditions" rows="5" 
-                      placeholder='[{"type":"group","op":"in","value":["employees"]},{"type":"time","op":"between","start":"08:00","end":"18:00"}]'></textarea>
-            <div class="form-text">Leave empty to match all requests.</div>
+            <div class="form-text">Optional</div>
           </div>
         </div>
+
+        <hr class="border-secondary">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="fw-semibold small">Conditions <span class="text-muted fw-normal">(all must match — leave empty to match everything)</span></span>
+          <button class="btn btn-sm btn-outline-info" onclick="addConditionRow()">
+            <i class="bi bi-plus-circle me-1"></i>Add Condition
+          </button>
+        </div>
+        <div id="conditionRows"></div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -119,36 +124,167 @@
 
 {% block scripts %}
 <script>
-async function savePolicy() {
-  let conds = [];
-  const raw = document.getElementById('p_conditions').value.trim();
-  if (raw) {
-    try { conds = JSON.parse(raw); }
-    catch(e) { alert('Invalid JSON in conditions field'); return; }
+// ── Condition type definitions ──────────────────────────────────────────────
+const COND_TYPES = {
+  always:      { label: 'Always (catch-all)',  fields: [] },
+  group:       { label: 'Group',               fields: ['list_value'],   listPlaceholder: 'employees, admins' },
+  username:    { label: 'Username',            fields: ['string_op', 'string_value'], placeholder: 'alice' },
+  mac:         { label: 'MAC Address',         fields: ['mac_op', 'string_value'],   placeholder: 'aa:bb:cc or aa:bb:cc:dd:ee:ff' },
+  time:        { label: 'Time of Day',         fields: ['time_range'] },
+  device_type: { label: 'Device Type',         fields: ['list_value'],   listPlaceholder: 'laptop, phone, unknown' },
+  nas_ip:      { label: 'NAS IP',              fields: ['nasip_op', 'string_value'], placeholder: '192.168.1.1' },
+};
+
+let rowIdx = 0;
+
+function addConditionRow(type) {
+  type = type || 'group';
+  const idx = rowIdx++;
+  const row = document.createElement('div');
+  row.className = 'condition-row border border-secondary rounded p-2 mb-2';
+  row.dataset.idx = idx;
+  row.innerHTML = buildRowHtml(idx, type);
+  document.getElementById('conditionRows').appendChild(row);
+}
+
+function buildRowHtml(idx, type) {
+  const typeOpts = Object.entries(COND_TYPES)
+    .map(([k,v]) => `<option value="${k}" ${k===type?'selected':''}>${v.label}</option>`)
+    .join('');
+
+  const def = COND_TYPES[type];
+  let extra = '';
+  if (def.fields.includes('string_op')) {
+    extra += `<select class="form-select form-select-sm cond-part" data-part="op" style="max-width:150px">
+      <option value="equals">equals</option>
+      <option value="startswith">starts with</option>
+      <option value="endswith">ends with</option>
+      <option value="contains">contains</option>
+      <option value="regex">regex</option>
+    </select>`;
   }
+  if (def.fields.includes('mac_op')) {
+    extra += `<select class="form-select form-select-sm cond-part" data-part="op" style="max-width:150px">
+      <option value="equals">equals</option>
+      <option value="startswith">OUI prefix</option>
+      <option value="in">in list</option>
+    </select>`;
+  }
+  if (def.fields.includes('nasip_op')) {
+    extra += `<select class="form-select form-select-sm cond-part" data-part="op" style="max-width:120px">
+      <option value="equals">equals</option>
+      <option value="in">in list</option>
+    </select>`;
+  }
+  if (def.fields.includes('string_value') || def.fields.includes('mac_op') || def.fields.includes('nasip_op')) {
+    extra += `<input type="text" class="form-control form-control-sm cond-part" data-part="value"
+               placeholder="${def.placeholder||''}" style="min-width:180px">`;
+  }
+  if (def.fields.includes('list_value')) {
+    extra += `<input type="text" class="form-control form-control-sm cond-part" data-part="list_value"
+               placeholder="${def.listPlaceholder||''}" style="min-width:200px">
+              <div class="form-text ms-1 mt-0">comma-separated</div>`;
+  }
+  if (def.fields.includes('time_range')) {
+    extra += `<div class="d-flex align-items-center gap-2">
+      <span class="text-muted small">from</span>
+      <input type="time" class="form-control form-control-sm cond-part" data-part="start" value="08:00" style="width:120px">
+      <span class="text-muted small">to</span>
+      <input type="time" class="form-control form-control-sm cond-part" data-part="end"   value="18:00" style="width:120px">
+    </div>`;
+  }
+
+  return `<div class="d-flex align-items-start gap-2 flex-wrap">
+    <select class="form-select form-select-sm" style="max-width:170px"
+            onchange="changeCondType(this, ${idx})">${typeOpts}</select>
+    ${extra}
+    <button class="btn btn-sm btn-outline-danger ms-auto" onclick="this.closest('.condition-row').remove()">
+      <i class="bi bi-trash"></i>
+    </button>
+  </div>`;
+}
+
+function changeCondType(sel, idx) {
+  const row = document.querySelector(`.condition-row[data-idx="${idx}"]`);
+  row.innerHTML = buildRowHtml(idx, sel.value);
+}
+
+function buildConditions() {
+  const conds = [];
+  for (const row of document.querySelectorAll('.condition-row')) {
+    const type = row.querySelector('select').value;
+    const def  = COND_TYPES[type];
+    const get  = (part) => {
+      const el = row.querySelector(`[data-part="${part}"]`);
+      return el ? el.value.trim() : '';
+    };
+
+    if (type === 'always') {
+      conds.push({ type: 'always' });
+    } else if (def.fields.includes('list_value')) {
+      const vals = get('list_value').split(',').map(s => s.trim()).filter(Boolean);
+      if (!vals.length) { alert(`Condition "${type}": value list cannot be empty`); return null; }
+      conds.push({ type, op: 'in', value: vals });
+    } else if (def.fields.includes('time_range')) {
+      const start = get('start'), end = get('end');
+      if (!start || !end) { alert('Time condition: start and end are required'); return null; }
+      conds.push({ type: 'time', op: 'between', start, end });
+    } else {
+      const op  = get('op')    || 'equals';
+      const val = get('value');
+      if (!val) { alert(`Condition "${type}": value cannot be empty`); return null; }
+      if (op === 'in') {
+        const vals = val.split(',').map(s => s.trim()).filter(Boolean);
+        conds.push({ type, op, value: vals });
+      } else {
+        conds.push({ type, op, value: val });
+      }
+    }
+  }
+  return conds;
+}
+
+async function savePolicy() {
+  const name = document.getElementById('p_name').value.trim();
+  if (!name) { alert('Name is required'); return; }
+
+  const conds = buildConditions();
+  if (conds === null) return;  // validation failed
+
   const body = {
-    name: document.getElementById('p_name').value,
-    priority: parseInt(document.getElementById('p_priority').value),
-    action: document.getElementById('p_action').value,
+    name,
+    priority:   parseInt(document.getElementById('p_priority').value) || 100,
+    action:     document.getElementById('p_action').value,
     conditions: conds,
-    vlan: parseInt(document.getElementById('p_vlan').value) || null,
+    vlan:       parseInt(document.getElementById('p_vlan').value) || null,
   };
   const r = await fetch('/api/v1/policies', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (sessionStorage.getItem('raspise_token') || '')},
+    headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   });
-  if (r.ok) location.reload();
-  else alert('Error: ' + (await r.json()).detail);
+  if (r.ok) {
+    location.reload();
+  } else {
+    const err = await r.json().catch(() => ({}));
+    alert('Error: ' + (err.detail || r.status));
+  }
 }
 
 async function deletePolicy(id, name) {
   if (!confirm('Delete policy "' + name + '"?')) return;
-  const r = await fetch('/api/v1/policies/' + id, {
-    method: 'DELETE',
-    headers: {'Authorization': 'Bearer ' + (sessionStorage.getItem('raspise_token') || '')},
-  });
+  const r = await fetch('/api/v1/policies/' + id, { method: 'DELETE' });
   if (r.ok) location.reload();
 }
+
+// Reset form when modal opens
+document.getElementById('addPolicyModal').addEventListener('show.bs.modal', () => {
+  document.getElementById('p_name').value = '';
+  document.getElementById('p_priority').value = '100';
+  document.getElementById('p_action').value = 'PERMIT';
+  document.getElementById('p_vlan').value = '';
+  document.getElementById('conditionRows').innerHTML = '';
+  rowIdx = 0;
+});
 </script>
 {% endblock %}

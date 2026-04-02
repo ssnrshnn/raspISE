@@ -359,9 +359,9 @@ async def settings_save(request: Request):
 
     elif section == "portal":
         data.setdefault("portal", {})
-        data["portal"]["session_duration_hours"] = int(form.get("session_duration_hours", 8))
-        data["portal"]["wifi_ssid"]              = form.get("wifi_ssid", "")
-        data["portal"]["wifi_password"]          = form.get("wifi_password", "")
+        data["portal"]["session_hours"] = int(form.get("session_hours", 8))
+        data["portal"]["guest_ssid"]    = form.get("guest_ssid", "")
+        data["portal"]["guest_psk"]     = form.get("guest_psk", "")
 
     elif section == "display":
         data.setdefault("display", {})

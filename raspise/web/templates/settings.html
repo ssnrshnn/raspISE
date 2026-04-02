@@ -150,20 +150,20 @@
         <div class="card-body">
           <div class="mb-3">
             <label class="form-label">Session Duration (hours)</label>
-            <input type="number" name="session_duration_hours" min="1" max="168"
+            <input type="number" name="session_hours" min="1" max="168"
                    class="form-control bg-dark border-secondary text-light"
-                   value="{{ cfg.portal.session_duration_hours }}" style="max-width:120px">
+                   value="{{ cfg.portal.session_hours }}" style="max-width:120px">
           </div>
           <div class="mb-3">
             <label class="form-label">Wi-Fi SSID</label>
-            <input type="text" name="wifi_ssid" class="form-control bg-dark border-secondary text-light"
-                   value="{{ cfg.portal.wifi_ssid }}">
+            <input type="text" name="guest_ssid" class="form-control bg-dark border-secondary text-light"
+                   value="{{ cfg.portal.guest_ssid }}">
             <div class="form-text">Used in the QR code on the display and guest success page.</div>
           </div>
           <div class="mb-3">
             <label class="form-label">Wi-Fi Password</label>
-            <input type="text" name="wifi_password" class="form-control bg-dark border-secondary text-light"
-                   value="{{ cfg.portal.wifi_password }}">
+            <input type="text" name="guest_psk" class="form-control bg-dark border-secondary text-light"
+                   value="{{ cfg.portal.guest_psk }}">
           </div>
         </div>
         <div class="card-footer border-secondary">
