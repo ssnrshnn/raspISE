@@ -301,7 +301,7 @@ async def guests_page(request: Request, db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(
         select(GuestSession).order_by(GuestSession.created_at.desc()).limit(100)
     )).scalars().all()
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()  # naive UTC — matches SQLite's naive datetime storage
     # Build portal URL using the same host but portal port
     portal_host = request.headers.get("host", "").split(":")[0] or "localhost"
     portal_url  = f"http://{portal_host}:{cfg.portal.port}"
