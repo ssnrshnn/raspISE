@@ -13,8 +13,11 @@ Group=raspise
 # Display process needs SPI/GPIO access
 SupplementaryGroups=spi gpio video
 
+WorkingDirectory=/opt/raspise
+
 # Runtime environment
 Environment=RASPISE_CONFIG=/etc/raspise/config.yaml
+Environment=PYTHONPATH=/opt/raspise
 Environment=PYTHONUNBUFFERED=1
 Environment=BLINKA_MCP2221=0
 

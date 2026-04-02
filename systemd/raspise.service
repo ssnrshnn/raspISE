@@ -11,8 +11,11 @@ Type=simple
 User=raspise
 Group=raspise
 
+WorkingDirectory=/opt/raspise
+
 # Runtime environment
 Environment=RASPISE_CONFIG=/etc/raspise/config.yaml
+Environment=PYTHONPATH=/opt/raspise
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 
