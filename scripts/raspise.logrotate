@@ -1,0 +1,12 @@
+# logrotate config for RaspISE
+# Installed to /etc/logrotate.d/raspise by install.sh / update.sh
+/var/log/raspise/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su raspise raspise
+}

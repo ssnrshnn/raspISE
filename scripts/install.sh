@@ -61,6 +61,10 @@ info "Creating directories…"
 mkdir -p "$RASPISE_DIR" "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
 chown "$RASPISE_USER:$RASPISE_USER" "$DATA_DIR" "$LOG_DIR"
 
+# ─── logrotate config ─────────────────────────────────────────────────────────
+info "Installing logrotate config…"
+cp "$REPO_DIR/scripts/raspise.logrotate" /etc/logrotate.d/raspise
+
 # ─── 5. Copy source ───────────────────────────────────────────────────────────
 info "Installing RaspISE to $RASPISE_DIR…"
 rsync -a --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \

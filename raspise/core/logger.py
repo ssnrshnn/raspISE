@@ -280,6 +280,11 @@ def setup_logging(cfg: "AppConfig | None" = None) -> logging.Logger:
 
     Can be called multiple times — removes existing handlers first so
     settings changes from the Web UI take effect without restarting.
+
+    Log files written to /var/log/raspise/:
+      raspise.log  — main application log (all namespaces, INFO+)
+      auth.log     — RADIUS + TACACS+ events only, JSON-per-line
+      access.log   — HTTP access log (uvicorn.access)
     """
     if cfg is None:
         from raspise.config import get_config
@@ -298,7 +303,7 @@ def setup_logging(cfg: "AppConfig | None" = None) -> logging.Logger:
     ch.setFormatter(formatter)
     root.addHandler(ch)
 
-    # ── 2. File ───────────────────────────────────────────────────────────
+    # ── 2. File — main log ────────────────────────────────────────────────
     log_path = Path(cfg.server.log_file)
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -313,9 +318,45 @@ def setup_logging(cfg: "AppConfig | None" = None) -> logging.Logger:
     except PermissionError:
         root.warning("Cannot write to log file %s — file logging disabled", log_path)
 
+    # ── 3. File — auth.log (RADIUS + TACACS+ events, JSON per line) ──────
+    auth_log_path = log_path.parent / "auth.log"
+    ah = _make_rotating(
+        auth_log_path,
+        max_bytes=10 * 1024 * 1024,
+        backup_count=10,            # keep 10 × 10 MB = up to 100 MB of auth history
+        formatter=_JsonAuthFormatter(),
+        log_filter=_AuthFilter(),
+    )
+    if ah:
+        root.addHandler(ah)
+
+    # ── 4. File — access.log (HTTP requests, uvicorn.access logger) ───────
+    access_log_path = log_path.parent / "access.log"
+    access_fmt = logging.Formatter(
+        '%(asctime)s %(message)s',
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    uvicorn_access = logging.getLogger("uvicorn.access")
+    # Remove any existing file handler we previously added to avoid duplicates
+    for _h in uvicorn_access.handlers[:]:
+        if isinstance(_h, logging.handlers.RotatingFileHandler):
+            _h.close()
+            uvicorn_access.removeHandler(_h)
+    uvicorn_access.propagate = True   # still goes to root / console
+
+    al = _make_rotating(
+        access_log_path,
+        max_bytes=10 * 1024 * 1024,
+        backup_count=5,
+        formatter=access_fmt,
+    )
+    if al:
+        # Attach directly to uvicorn.access so only HTTP lines go here
+        uvicorn_access.addHandler(al)
+
     lf = cfg.log_forwarding
 
-    # ── 3. Syslog ─────────────────────────────────────────────────────────
+    # ── 5. Syslog ─────────────────────────────────────────────────────────
     if lf.syslog.enabled:
         try:
             facility = _SYSLOG_FACILITIES.get(lf.syslog.facility.lower(), 16)
@@ -357,7 +398,7 @@ def setup_logging(cfg: "AppConfig | None" = None) -> logging.Logger:
         except Exception as exc:
             root.warning("Syslog handler setup failed: %s", exc)
 
-    # ── 4. Graylog / GELF ─────────────────────────────────────────────────
+    # ── 6. Graylog / GELF ─────────────────────────────────────────────────
     if lf.graylog.enabled:
         try:
             gh = GELFHandler(
@@ -373,7 +414,7 @@ def setup_logging(cfg: "AppConfig | None" = None) -> logging.Logger:
         except Exception as exc:
             root.warning("Graylog handler setup failed: %s", exc)
 
-    # ── 5. Webhook ────────────────────────────────────────────────────────
+    # ── 7. Webhook ────────────────────────────────────────────────────────
     if lf.webhook.enabled and lf.webhook.url:
         try:
             level_int = getattr(logging, lf.webhook.level.upper(), logging.WARNING)
@@ -395,6 +436,77 @@ def setup_logging(cfg: "AppConfig | None" = None) -> logging.Logger:
 
 def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
+
+
+def setup_display_logging(cfg: "AppConfig | None" = None) -> None:
+    """
+    Called from display_main.py to route display service logs into
+    /var/log/raspise/display.log separately from the main log.
+    Must be called after setup_logging().
+    """
+    if cfg is None:
+        from raspise.config import get_config
+        cfg = get_config()
+
+    log_dir  = Path(cfg.server.log_file).parent
+    fmt      = logging.Formatter(
+        "%(asctime)s [%(levelname)-8s] %(name)s — %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    dh = _make_rotating(
+        log_dir / "display.log",
+        max_bytes=5 * 1024 * 1024,
+        backup_count=3,
+        formatter=fmt,
+    )
+    if dh:
+        # Attach to the display namespace logger so only display lines go here
+        logging.getLogger("raspise.display").addHandler(dh)
+        # Also capture __main__ from display_main.py
+        logging.getLogger("__main__").addHandler(dh)
+
+
+# ---------------------------------------------------------------------------
+# Auth event log  (structured JSON, one record per line)
+# ---------------------------------------------------------------------------
+
+class _AuthFilter(logging.Filter):
+    """Pass only records from RADIUS / TACACS+ auth namespaces."""
+    _PREFIXES = ("raspise.radius", "raspise.tacacs")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return any(record.name.startswith(p) for p in self._PREFIXES)
+
+
+class _JsonAuthFormatter(logging.Formatter):
+    """Format each auth-related record as a single JSON line."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return json.dumps({
+            "ts":      self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level":   record.levelname,
+            "logger":  record.name,
+            "msg":     record.getMessage(),
+            "pid":     record.process,
+        })
+
+
+def _make_rotating(path: Path, max_bytes: int, backup_count: int,
+                   formatter: logging.Formatter,
+                   log_filter: logging.Filter | None = None) -> logging.handlers.RotatingFileHandler | None:
+    """Create a RotatingFileHandler; return None on permission error."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        h = logging.handlers.RotatingFileHandler(
+            path, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8",
+        )
+        h.setFormatter(formatter)
+        if log_filter:
+            h.addFilter(log_filter)
+        return h
+    except PermissionError:
+        sys.stderr.write(f"[RaspISE] Cannot write to {path} — skipping\n")
+        return None
 
 
 def send_test_log(target: str) -> tuple[bool, str]:

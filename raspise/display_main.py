@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 from raspise.core import setup_logging, get_logger
+from raspise.core.logger import setup_display_logging
 from raspise.display import display_manager, build_screens
 
 log = get_logger(__name__)
@@ -19,6 +20,7 @@ log = get_logger(__name__)
 
 def main() -> None:
     setup_logging()
+    setup_display_logging()
     log.info("RaspISE Display service starting…")
     screens = build_screens()
     display_manager.register_screens(screens)
