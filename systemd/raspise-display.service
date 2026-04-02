@@ -23,9 +23,6 @@ Environment=PYTHONPATH=/opt/raspise
 Environment=PYTHONUNBUFFERED=1
 Environment=BLINKA_MCP2221=0
 
-# Ensure the simulation output directory exists before the namespace is set up
-ExecStartPre=/bin/mkdir -p /tmp/raspise_display
-
 # Main process
 ExecStart=/opt/raspise/venv/bin/python -m raspise.display_main
 
@@ -47,7 +44,8 @@ DeviceAllow=/dev/spidev0.0 rw
 DeviceAllow=/dev/spidev0.1 rw
 DeviceAllow=/dev/gpiomem rw
 DeviceAllow=/dev/mem rw
-ReadWritePaths=/tmp/raspise_display /var/log/raspise
+# /tmp/raspise_display is inside the private /tmp namespace — no bind-mount needed
+ReadWritePaths=/var/log/raspise
 
 # Resource limits
 MemoryMax=64M
