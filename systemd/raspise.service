@@ -17,7 +17,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 
 # Main process
-ExecStart=/opt/raspise/venv/bin/raspise
+ExecStart=/opt/raspise/venv/bin/python -m raspise.main
 
 # Graceful reload (re-reads config)
 ExecReload=/bin/kill -HUP $MAINPID

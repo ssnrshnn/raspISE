@@ -19,7 +19,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=BLINKA_MCP2221=0
 
 # Main process
-ExecStart=/opt/raspise/venv/bin/raspise-display
+ExecStart=/opt/raspise/venv/bin/python -m raspise.display_main
 
 # Restart after crash (brief delay to let SPI settle after Pi boot)
 Restart=on-failure
