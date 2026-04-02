@@ -1,0 +1,51 @@
+[Unit]
+Description=RaspISE — TFT Display Service
+Documentation=https://github.com/you/raspise
+# Start after main raspise so the DB is already initialised
+After=raspise.service network.target
+Wants=raspise.service
+
+[Service]
+Type=simple
+User=raspise
+Group=raspise
+
+# Display process needs SPI/GPIO access
+SupplementaryGroups=spi gpio video
+
+# Runtime environment
+Environment=RASPISE_CONFIG=/etc/raspise/config.yaml
+Environment=PYTHONUNBUFFERED=1
+Environment=BLINKA_MCP2221=0
+
+# Main process
+ExecStart=/opt/raspise/venv/bin/raspise-display
+
+# Restart after crash (brief delay to let SPI settle after Pi boot)
+Restart=on-failure
+RestartSec=10s
+StartLimitIntervalSec=120s
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=raspise-display
+
+# Security hardening (relaxed for SPI/GPIO access)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+# Must access SPI/GPIO device nodes:
+DeviceAllow=/dev/spidev0.0 rw
+DeviceAllow=/dev/spidev0.1 rw
+DeviceAllow=/dev/gpiomem rw
+DeviceAllow=/dev/mem rw
+ReadWritePaths=/tmp/raspise_display /var/log/raspise
+
+# Resource limits
+MemoryMax=64M
+TasksMax=16
+
+[Install]
+WantedBy=multi-user.target

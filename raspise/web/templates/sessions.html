@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Sessions{% endblock %}
+{% block page_title %}Active RADIUS Sessions{% endblock %}
+
+{% block content %}
+<div class="mb-3 d-flex justify-content-between">
+  <span class="text-muted small">{{ sessions|length }} active sessions</span>
+  <button class="btn btn-sm btn-outline-secondary" onclick="location.reload()">
+    <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+  </button>
+</div>
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 small align-middle">
+      <thead class="table-secondary">
+        <tr><th>Session ID</th><th>Username</th><th>MAC</th><th>IP</th><th>NAS</th><th>VLAN</th><th>Started</th><th>↓ In</th><th>↑ Out</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for s in sessions %}
+        <tr>
+          <td class="font-monospace small text-muted">{{ s.session_id[:16] }}…</td>
+          <td class="fw-semibold">{{ s.username }}</td>
+          <td class="font-monospace small">{{ s.mac_address or '—' }}</td>
+          <td class="font-monospace small">{{ s.ip_address or '—' }}</td>
+          <td class="font-monospace small text-muted">{{ s.nas_ip or '—' }}</td>
+          <td>{% if s.vlan %}<span class="badge bg-info text-dark">{{ s.vlan }}</span>{% else %}—{% endif %}</td>
+          <td class="text-muted">{{ s.started_at.strftime('%H:%M:%S') }}</td>
+          <td class="text-muted">{{ (s.bytes_in / 1024)|round(1) }} KB</td>
+          <td class="text-muted">{{ (s.bytes_out / 1024)|round(1) }} KB</td>
+          <td>
+            <button class="btn btn-xs btn-outline-danger" title="Remove session"
+                    onclick="removeSession({{ s.id }})">
+              <i class="bi bi-x-circle"></i>
+            </button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10" class="text-center text-muted py-4">No active sessions.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<p class="text-muted small mt-2">
+  <i class="bi bi-info-circle me-1"></i>
+  Removing a session here only clears the database record.
+  Send a CoA (Change of Authorization) to the NAS switch to force disconnection.
+</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function removeSession(id) {
+  if (!confirm('Remove session record?')) return;
+  const r = await fetch('/api/v1/sessions/' + id, {
+    method: 'DELETE',
+    headers: {'Authorization': 'Bearer ' + (sessionStorage.getItem('raspise_token') || '')},
+  });
+  if (r.ok) location.reload();
+}
+</script>
+{% endblock %}

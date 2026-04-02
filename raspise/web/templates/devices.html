@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Devices{% endblock %}
+{% block page_title %}Device Inventory{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <span class="text-muted small">{{ devices|length }} devices (last 200)</span>
+  <div class="d-flex gap-2">
+    <input type="text" class="form-control form-control-sm" id="searchInput" placeholder="Search…" style="width:200px">
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 small align-middle" id="deviceTable">
+      <thead class="table-secondary">
+        <tr>
+          <th>MAC Address</th><th>IP</th><th>Hostname</th>
+          <th>Vendor</th><th>Type</th><th>OS</th>
+          <th>Status</th><th>Last Seen</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in devices %}
+        <tr>
+          <td class="font-monospace fw-semibold">{{ d.mac_address }}</td>
+          <td class="font-monospace">{{ d.ip_address or '—' }}</td>
+          <td>{{ d.hostname or '—' }}</td>
+          <td class="text-muted small">{{ d.vendor or '—' }}</td>
+          <td>
+            <span class="badge bg-info-subtle text-info border border-info-subtle">{{ d.device_type }}</span>
+          </td>
+          <td class="text-muted small">{{ d.os_type }}</td>
+          <td>
+            {% if d.authorized %}
+              <span class="badge bg-success-subtle text-success border border-success-subtle">Authorised</span>
+            {% else %}
+              <span class="badge bg-danger-subtle text-danger border border-danger-subtle">Blocked</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ d.last_seen.strftime('%m-%d %H:%M') }}</td>
+          <td>
+            <button class="btn btn-xs btn-outline-secondary" title="Toggle auth"
+                    onclick="toggleDevice({{ d.id }}, {{ 'false' if d.authorized else 'true' }})">
+              {% if d.authorized %}
+                <i class="bi bi-slash-circle"></i>
+              {% else %}
+                <i class="bi bi-check-circle"></i>
+              {% endif %}
+            </button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-center text-muted py-4">No devices discovered yet. The profiler will populate this table automatically.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Live search
+document.getElementById('searchInput').addEventListener('input', function() {
+  const q = this.value.toLowerCase();
+  document.querySelectorAll('#deviceTable tbody tr').forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+});
+
+async function toggleDevice(id, newState) {
+  const r = await fetch('/api/v1/devices/' + id, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (sessionStorage.getItem('raspise_token') || '')},
+    body: JSON.stringify({authorized: newState}),
+  });
+  if (r.ok) location.reload();
+  else alert('Error updating device');
+}
+</script>
+{% endblock %}

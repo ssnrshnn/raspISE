@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Policies{% endblock %}
+{% block page_title %}Access Control Policies{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <span class="text-muted small">Evaluated in priority order · first match wins · default DENY if none match</span>
+  <button class="btn btn-info btn-sm" data-bs-toggle="modal" data-bs-target="#addPolicyModal">
+    <i class="bi bi-plus-circle me-1"></i>Add Policy
+  </button>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 small align-middle">
+      <thead class="table-secondary">
+        <tr><th>#</th><th>Name</th><th>Conditions</th><th>Action</th><th>VLAN</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for p in policies %}
+        <tr>
+          <td><span class="badge bg-secondary">{{ p.priority }}</span></td>
+          <td class="fw-semibold">{{ p.name }}</td>
+          <td>
+            {% set conds = p.conditions | from_json %}
+            {% for c in conds %}
+              <span class="badge bg-dark border border-secondary me-1 small">
+                {{ c.type }}={{ c.value if c.value else c.start ~ '–' ~ c.end }}
+              </span>
+            {% else %}
+              <span class="text-muted">any</span>
+            {% endfor %}
+          </td>
+          <td>
+            {% if p.action == 'PERMIT' %}
+              <span class="badge bg-success">✓ Permit</span>
+            {% elif p.action == 'DENY' %}
+              <span class="badge bg-danger">✗ Deny</span>
+            {% else %}
+              <span class="badge bg-warning text-dark">Guest</span>
+            {% endif %}
+          </td>
+          <td>{{ p.vlan or '—' }}</td>
+          <td>
+            {% if p.enabled %}
+              <span class="badge bg-success-subtle text-success border border-success-subtle">Active</span>
+            {% else %}
+              <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">Disabled</span>
+            {% endif %}
+          </td>
+          <td>
+            <button class="btn btn-sm btn-outline-danger"
+                    onclick="deletePolicy({{ p.id }}, '{{ p.name }}')">
+              <i class="bi bi-trash"></i>
+            </button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-center text-muted py-4">No policies defined. All requests will be denied by default.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Default deny notice -->
+<div class="alert alert-warning-subtle border border-warning-subtle mt-3 small">
+  <i class="bi bi-exclamation-triangle me-2"></i>
+  <strong>Default Deny:</strong> Any request that does not match a policy is automatically rejected.
+  Add a <em>catch-all PERMIT</em> rule at low priority to allow everything else.
+</div>
+
+<!-- Add Policy Modal -->
+<div class="modal fade" id="addPolicyModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Add Policy Rule</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Name *</label>
+            <input type="text" class="form-control" id="p_name" required>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Priority (low=first)</label>
+            <input type="number" class="form-control" id="p_priority" value="100" min="1" max="9999">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Action</label>
+            <select class="form-select" id="p_action">
+              <option value="PERMIT">✓ Permit</option>
+              <option value="DENY">✗ Deny</option>
+              <option value="GUEST">Guest</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">VLAN (optional)</label>
+            <input type="number" class="form-control" id="p_vlan" min="1" max="4094" placeholder="10">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Conditions (JSON)</label>
+            <textarea class="form-control font-monospace small" id="p_conditions" rows="5" 
+                      placeholder='[{"type":"group","op":"in","value":["employees"]},{"type":"time","op":"between","start":"08:00","end":"18:00"}]'></textarea>
+            <div class="form-text">Leave empty to match all requests.</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-info" onclick="savePolicy()">Save Policy</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function savePolicy() {
+  let conds = [];
+  const raw = document.getElementById('p_conditions').value.trim();
+  if (raw) {
+    try { conds = JSON.parse(raw); }
+    catch(e) { alert('Invalid JSON in conditions field'); return; }
+  }
+  const body = {
+    name: document.getElementById('p_name').value,
+    priority: parseInt(document.getElementById('p_priority').value),
+    action: document.getElementById('p_action').value,
+    conditions: conds,
+    vlan: parseInt(document.getElementById('p_vlan').value) || null,
+  };
+  const r = await fetch('/api/v1/policies', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (sessionStorage.getItem('raspise_token') || '')},
+    body: JSON.stringify(body),
+  });
+  if (r.ok) location.reload();
+  else alert('Error: ' + (await r.json()).detail);
+}
+
+async function deletePolicy(id, name) {
+  if (!confirm('Delete policy "' + name + '"?')) return;
+  const r = await fetch('/api/v1/policies/' + id, {
+    method: 'DELETE',
+    headers: {'Authorization': 'Bearer ' + (sessionStorage.getItem('raspise_token') || '')},
+  });
+  if (r.ok) location.reload();
+}
+</script>
+{% endblock %}

@@ -1,0 +1,45 @@
+# ── Core framework ────────────────────────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+jinja2>=3.1.3
+python-multipart>=0.0.9
+
+# ── Database ──────────────────────────────────────────────────────────────────
+sqlalchemy>=2.0.29
+aiosqlite>=0.20.0
+alembic>=1.13.1
+
+# ── Auth / Crypto ─────────────────────────────────────────────────────────────
+passlib[bcrypt]>=1.7.4
+python-jose[cryptography]>=3.3.0
+cryptography>=42.0.5
+
+# ── RADIUS protocol ───────────────────────────────────────────────────────────
+pyrad>=2.4
+
+# ── TACACS+ (pure-Python implementation bundled in this project) ──────────────
+# (no external package needed — implemented in raspise/tacacs/)
+
+# ── Network / Profiling ───────────────────────────────────────────────────────
+scapy>=2.5.0          # DHCP sniffer + ARP monitor
+requests>=2.31.0
+psutil>=5.9.8
+
+# ── Display (Raspberry Pi SPI / TFT) ─────────────────────────────────────────
+pillow>=10.3.0
+qrcode>=7.4.2
+# Pi-specific packages (installed by install.sh on target hardware):
+#   spidev
+#   RPi.GPIO
+#   adafruit-circuitpython-ili9341
+#   adafruit-blinka
+
+# ── Pydantic / settings ───────────────────────────────────────────────────────
+pydantic>=2.7.0
+pydantic-settings>=2.2.1
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+pyyaml>=6.0.1
+click>=8.1.7
+python-dotenv>=1.0.1
+httpx>=0.27.0          # async HTTP for REST tests

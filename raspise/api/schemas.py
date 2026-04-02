@@ -1,0 +1,215 @@
+"""Pydantic schemas for the REST API."""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+from raspise.db.models import AuthMethod, AuthResult, PolicyAction
+
+
+# ---------------------------------------------------------------------------
+# Common
+# ---------------------------------------------------------------------------
+
+class StatusResponse(BaseModel):
+    status: str
+    message: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Auth token
+# ---------------------------------------------------------------------------
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+
+class UserCreate(BaseModel):
+    username: str = Field(..., min_length=2, max_length=64, pattern=r"^[a-zA-Z0-9._\-]+$")
+    password: str = Field(..., min_length=8, max_length=128)
+    email:    str = Field("", max_length=128)
+    full_name: str = Field("", max_length=128)
+    group_id: int | None = None
+    enabled:  bool = True
+
+
+class UserUpdate(BaseModel):
+    email:     str | None = Field(None, max_length=128)
+    full_name: str | None = Field(None, max_length=128)
+    group_id:  int | None = None
+    enabled:   bool | None = None
+    password:  str | None = Field(None, min_length=8, max_length=128)
+
+
+class UserOut(BaseModel):
+    id:         int
+    username:   str
+    email:      str
+    full_name:  str
+    group_id:   int | None
+    group_name: str | None = None
+    enabled:    bool
+    created_at: datetime
+    last_login: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Groups
+# ---------------------------------------------------------------------------
+
+class GroupCreate(BaseModel):
+    name:        str = Field(..., min_length=1, max_length=64)
+    description: str = Field("", max_length=255)
+
+
+class GroupOut(BaseModel):
+    id:          int
+    name:        str
+    description: str
+    created_at:  datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Devices
+# ---------------------------------------------------------------------------
+
+class DeviceUpdate(BaseModel):
+    authorized: bool | None = None
+    notes:      str | None = Field(None, max_length=1024)
+    device_type: str | None = None
+
+
+class DeviceOut(BaseModel):
+    id:                int
+    mac_address:       str
+    ip_address:        str
+    hostname:          str
+    vendor:            str
+    device_type:       str
+    os_type:           str
+    dhcp_fingerprint:  str
+    authorized:        bool
+    first_seen:        datetime
+    last_seen:         datetime
+    notes:             str
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Policies
+# ---------------------------------------------------------------------------
+
+class PolicyCreate(BaseModel):
+    name:        str = Field(..., min_length=1, max_length=128)
+    description: str = Field("", max_length=512)
+    priority:    int = Field(100, ge=1, le=9999)
+    conditions:  list[dict[str, Any]] = []
+    action:      PolicyAction = PolicyAction.PERMIT
+    vlan:        int | None = Field(None, ge=1, le=4094)
+    group_id:    int | None = None
+    enabled:     bool = True
+
+
+class PolicyUpdate(BaseModel):
+    name:        str | None = Field(None, min_length=1, max_length=128)
+    description: str | None = None
+    priority:    int | None = Field(None, ge=1, le=9999)
+    conditions:  list[dict[str, Any]] | None = None
+    action:      PolicyAction | None = None
+    vlan:        int | None = None
+    group_id:    int | None = None
+    enabled:     bool | None = None
+
+
+class PolicyOut(BaseModel):
+    id:          int
+    name:        str
+    description: str
+    priority:    int
+    conditions:  list[dict[str, Any]]
+    action:      str
+    vlan:        int | None
+    group_id:    int | None
+    enabled:     bool
+    created_at:  datetime
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("conditions", mode="before")
+    @classmethod
+    def parse_conditions(cls, v):
+        import json
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
+
+
+# ---------------------------------------------------------------------------
+# Auth Logs
+# ---------------------------------------------------------------------------
+
+class AuthLogOut(BaseModel):
+    id:          int
+    timestamp:   datetime
+    username:    str
+    mac_address: str
+    ip_address:  str
+    nas_ip:      str
+    auth_method: str
+    result:      str
+    reason:      str
+    policy_name: str
+    vlan:        int | None
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Active Sessions
+# ---------------------------------------------------------------------------
+
+class ActiveSessionOut(BaseModel):
+    id:          int
+    session_id:  str
+    username:    str
+    mac_address: str
+    ip_address:  str
+    nas_ip:      str
+    vlan:        int | None
+    started_at:  datetime
+    bytes_in:    int
+    bytes_out:   int
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Dashboard summary
+# ---------------------------------------------------------------------------
+
+class DashboardStats(BaseModel):
+    total_users:      int
+    total_devices:    int
+    active_sessions:  int
+    auth_today:       int
+    auth_success_today: int
+    auth_failure_today: int
+    guest_sessions_active: int

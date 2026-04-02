@@ -1,0 +1,435 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block page_title %}System Settings{% endblock %}
+
+{% block content %}
+{% if request.query_params.get('saved') %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+  Settings saved. <strong>Restart the service</strong> for changes to take effect.
+  <form method="post" action="/system/service/raspise/restart" class="d-inline ms-2">
+    <button class="btn btn-sm btn-success">Restart Now</button>
+  </form>
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<ul class="nav nav-tabs mb-4" id="settingsTabs">
+  <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-server">Server</a></li>
+  <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-radius">RADIUS</a></li>
+  <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-tacacs">TACACS+</a></li>
+  <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-portal">Guest Portal</a></li>
+  <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-display">Display</a></li>
+  <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-logfwd">Log Forwarding</a></li>
+</ul>
+
+<div class="tab-content">
+
+  <!-- ── Server ── -->
+  <div class="tab-pane fade show active" id="tab-server">
+    <div class="card" style="max-width:560px">
+      <div class="card-header"><i class="bi bi-server me-2"></i>Server Settings</div>
+      <form method="post" action="/settings/save">
+        <input type="hidden" name="section" value="server">
+        <div class="card-body">
+          <div class="mb-3">
+            <label class="form-label">Node Name</label>
+            <input type="text" name="name" class="form-control bg-dark border-secondary text-light"
+                   value="{{ cfg.server.name }}">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Log Level</label>
+            <select name="log_level" class="form-select bg-dark border-secondary text-light">
+              {% for lvl in ['DEBUG','INFO','WARNING','ERROR'] %}
+              <option value="{{ lvl }}" {{ 'selected' if cfg.server.log_level == lvl }}>{{ lvl }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" name="debug" id="debugCheck"
+                   {{ 'checked' if cfg.server.debug }}>
+            <label class="form-check-label" for="debugCheck">Debug Mode</label>
+          </div>
+        </div>
+        <div class="card-footer border-secondary">
+          <button type="submit" class="btn btn-sm btn-info">Save Server Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── RADIUS ── -->
+  <div class="tab-pane fade" id="tab-radius">
+    <div class="card" style="max-width:560px">
+      <div class="card-header"><i class="bi bi-shield-check me-2"></i>RADIUS Server</div>
+      <form method="post" action="/settings/save">
+        <input type="hidden" name="section" value="radius">
+        <div class="card-body">
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" name="enabled" id="radEnabled"
+                   {{ 'checked' if cfg.radius.enabled }}>
+            <label class="form-check-label" for="radEnabled">Enable built-in RADIUS server</label>
+            <div class="form-text">Disable if using FreeRADIUS.</div>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col">
+              <label class="form-label">Auth Port</label>
+              <input type="number" name="auth_port" class="form-control bg-dark border-secondary text-light"
+                     value="{{ cfg.radius.auth_port }}">
+            </div>
+            <div class="col">
+              <label class="form-label">Acct Port</label>
+              <input type="number" name="acct_port" class="form-control bg-dark border-secondary text-light"
+                     value="{{ cfg.radius.acct_port }}">
+            </div>
+          </div>
+          <div class="row g-3">
+            <div class="col">
+              <label class="form-label">Default VLAN</label>
+              <input type="number" name="default_vlan" class="form-control bg-dark border-secondary text-light"
+                     value="{{ cfg.radius.default_vlan }}">
+            </div>
+            <div class="col">
+              <label class="form-label">Guest VLAN</label>
+              <input type="number" name="guest_vlan" class="form-control bg-dark border-secondary text-light"
+                     value="{{ cfg.radius.guest_vlan }}">
+            </div>
+          </div>
+          <p class="text-muted small mt-3 mb-0">
+            <i class="bi bi-link-45deg me-1"></i>
+            Manage NAS clients at <a href="/radius-clients">RADIUS Clients</a>.
+          </p>
+        </div>
+        <div class="card-footer border-secondary">
+          <button type="submit" class="btn btn-sm btn-info">Save RADIUS Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── TACACS+ ── -->
+  <div class="tab-pane fade" id="tab-tacacs">
+    <div class="card" style="max-width:560px">
+      <div class="card-header"><i class="bi bi-terminal me-2"></i>TACACS+ Server</div>
+      <form method="post" action="/settings/save">
+        <input type="hidden" name="section" value="tacacs">
+        <div class="card-body">
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" name="enabled" id="tacEnabled"
+                   {{ 'checked' if cfg.tacacs.enabled }}>
+            <label class="form-check-label" for="tacEnabled">Enable TACACS+ server</label>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Port</label>
+            <input type="number" name="port" class="form-control bg-dark border-secondary text-light"
+                   value="{{ cfg.tacacs.port }}" style="max-width:120px">
+          </div>
+          <p class="text-muted small mb-0">
+            <i class="bi bi-link-45deg me-1"></i>
+            Manage device clients at <a href="/tacacs-clients">TACACS+ Clients</a>.
+          </p>
+        </div>
+        <div class="card-footer border-secondary">
+          <button type="submit" class="btn btn-sm btn-info">Save TACACS+ Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── Guest Portal ── -->
+  <div class="tab-pane fade" id="tab-portal">
+    <div class="card" style="max-width:560px">
+      <div class="card-header"><i class="bi bi-wifi me-2"></i>Guest Portal</div>
+      <form method="post" action="/settings/save">
+        <input type="hidden" name="section" value="portal">
+        <div class="card-body">
+          <div class="mb-3">
+            <label class="form-label">Session Duration (hours)</label>
+            <input type="number" name="session_duration_hours" min="1" max="168"
+                   class="form-control bg-dark border-secondary text-light"
+                   value="{{ cfg.portal.session_duration_hours }}" style="max-width:120px">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Wi-Fi SSID</label>
+            <input type="text" name="wifi_ssid" class="form-control bg-dark border-secondary text-light"
+                   value="{{ cfg.portal.wifi_ssid }}">
+            <div class="form-text">Used in the QR code on the display and guest success page.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Wi-Fi Password</label>
+            <input type="text" name="wifi_password" class="form-control bg-dark border-secondary text-light"
+                   value="{{ cfg.portal.wifi_password }}">
+          </div>
+        </div>
+        <div class="card-footer border-secondary">
+          <button type="submit" class="btn btn-sm btn-info">Save Portal Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── Display ── -->
+  <div class="tab-pane fade" id="tab-display">
+    <div class="card" style="max-width:560px">
+      <div class="card-header"><i class="bi bi-display me-2"></i>TFT Display</div>
+      <form method="post" action="/settings/save">
+        <input type="hidden" name="section" value="display">
+        <div class="card-body">
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" name="enabled" id="dispEnabled"
+                   {{ 'checked' if cfg.display.enabled }}>
+            <label class="form-check-label" for="dispEnabled">Enable TFT Display</label>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Driver</label>
+            <select name="driver" class="form-select bg-dark border-secondary text-light">
+              {% for d in ['ili9341', 'st7789', 'simulation'] %}
+              <option value="{{ d }}" {{ 'selected' if cfg.display.driver == d }}>{{ d }}</option>
+              {% endfor %}
+            </select>
+            <div class="form-text"><code>simulation</code> saves PNG frames to /tmp/raspise_display/</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Rotation</label>
+            <select name="rotation" class="form-select bg-dark border-secondary text-light">
+              {% for r in [0, 90, 180, 270] %}
+              <option value="{{ r }}" {{ 'selected' if cfg.display.rotation == r }}>{{ r }}°</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Cycle Interval (seconds)</label>
+            <input type="number" name="cycle_interval" min="3" max="60"
+                   class="form-control bg-dark border-secondary text-light"
+                   value="{{ cfg.display.screen_cycle_seconds }}" style="max-width:100px">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Screens (comma-separated)</label>
+            <input type="text" name="screens" class="form-control bg-dark border-secondary text-light"
+                   value="{{ cfg.display.screens | join(', ') }}">
+            <div class="form-text">Available: auth_log, stats, sessions, network, qr_code</div>
+          </div>
+        </div>
+        <div class="card-footer border-secondary">
+          <button type="submit" class="btn btn-sm btn-info">Save Display Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── Log Forwarding ── -->
+  <div class="tab-pane fade" id="tab-logfwd">
+    <div class="row g-4">
+
+      <!-- Syslog -->
+      <div class="col-lg-6">
+        <div class="card h-100">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-terminal-split me-2"></i>Syslog</span>
+            <form method="post" action="/settings/test-log/syslog" class="d-inline">
+              <button class="btn btn-sm btn-outline-secondary test-btn" data-target="syslog">
+                <i class="bi bi-send me-1"></i>Test
+              </button>
+            </form>
+          </div>
+          <form method="post" action="/settings/save">
+            <input type="hidden" name="section" value="log_forwarding_syslog">
+            <div class="card-body">
+              <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" name="enabled" id="syslogEnabled"
+                       {{ 'checked' if cfg.log_forwarding.syslog.enabled }}>
+                <label class="form-check-label" for="syslogEnabled">Enable Syslog forwarding</label>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Address</label>
+                <input type="text" name="address" class="form-control bg-dark border-secondary text-light"
+                       value="{{ cfg.log_forwarding.syslog.address }}"
+                       placeholder="/dev/log  or  192.168.1.50:514">
+                <div class="form-text">Local socket path <strong>or</strong> <code>host:port</code> for remote syslog.</div>
+              </div>
+              <div class="row g-2">
+                <div class="col">
+                  <label class="form-label">Facility</label>
+                  <select name="facility" class="form-select bg-dark border-secondary text-light">
+                    {% for f in ['local0','local1','local2','local3','local4','local5','local6','local7','daemon','auth','syslog'] %}
+                    <option value="{{ f }}" {{ 'selected' if cfg.log_forwarding.syslog.facility == f }}>{{ f }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col">
+                  <label class="form-label">Protocol</label>
+                  <select name="protocol" class="form-select bg-dark border-secondary text-light">
+                    <option value="udp" {{ 'selected' if cfg.log_forwarding.syslog.protocol == 'udp' }}>UDP</option>
+                    <option value="tcp" {{ 'selected' if cfg.log_forwarding.syslog.protocol == 'tcp' }}>TCP</option>
+                  </select>
+                </div>
+                <div class="col">
+                  <label class="form-label">Port</label>
+                  <input type="number" name="port" class="form-control bg-dark border-secondary text-light"
+                         value="{{ cfg.log_forwarding.syslog.port }}">
+                </div>
+              </div>
+            </div>
+            <div class="card-footer border-secondary">
+              <button type="submit" class="btn btn-sm btn-info">Save</button>
+              <span class="test-result ms-2 text-muted small" id="syslog-result"></span>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Graylog -->
+      <div class="col-lg-6">
+        <div class="card h-100">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-reception-4 me-2"></i>Graylog / GELF</span>
+            <button class="btn btn-sm btn-outline-secondary test-btn" data-target="graylog">
+              <i class="bi bi-send me-1"></i>Test
+            </button>
+          </div>
+          <form method="post" action="/settings/save">
+            <input type="hidden" name="section" value="log_forwarding_graylog">
+            <div class="card-body">
+              <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" name="enabled" id="graylogEnabled"
+                       {{ 'checked' if cfg.log_forwarding.graylog.enabled }}>
+                <label class="form-check-label" for="graylogEnabled">Enable Graylog/GELF forwarding</label>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Host</label>
+                <input type="text" name="host" class="form-control bg-dark border-secondary text-light"
+                       value="{{ cfg.log_forwarding.graylog.host }}"
+                       placeholder="192.168.1.100">
+              </div>
+              <div class="row g-2">
+                <div class="col">
+                  <label class="form-label">Port</label>
+                  <input type="number" name="port" class="form-control bg-dark border-secondary text-light"
+                         value="{{ cfg.log_forwarding.graylog.port }}" placeholder="12201">
+                </div>
+                <div class="col">
+                  <label class="form-label">Protocol</label>
+                  <select name="protocol" class="form-select bg-dark border-secondary text-light">
+                    <option value="udp" {{ 'selected' if cfg.log_forwarding.graylog.protocol == 'udp' }}>UDP</option>
+                    <option value="tcp" {{ 'selected' if cfg.log_forwarding.graylog.protocol == 'tcp' }}>TCP</option>
+                  </select>
+                </div>
+              </div>
+              <p class="form-text mt-2 mb-0">
+                Compatible with Graylog GELF input, Logstash GELF plugin, and any GELF-capable aggregator.
+              </p>
+            </div>
+            <div class="card-footer border-secondary">
+              <button type="submit" class="btn btn-sm btn-info">Save</button>
+              <span class="test-result ms-2 text-muted small" id="graylog-result"></span>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Webhook -->
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-globe2 me-2"></i>Webhook (HTTP POST)</span>
+            <button class="btn btn-sm btn-outline-secondary test-btn" data-target="webhook">
+              <i class="bi bi-send me-1"></i>Test
+            </button>
+          </div>
+          <form method="post" action="/settings/save">
+            <input type="hidden" name="section" value="log_forwarding_webhook">
+            <div class="card-body">
+              <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" name="enabled" id="webhookEnabled"
+                       {{ 'checked' if cfg.log_forwarding.webhook.enabled }}>
+                <label class="form-check-label" for="webhookEnabled">Enable webhook forwarding</label>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">URL <span class="text-danger">*</span></label>
+                <input type="url" name="url" class="form-control bg-dark border-secondary text-light"
+                       value="{{ cfg.log_forwarding.webhook.url }}"
+                       placeholder="https://hooks.slack.com/services/…  or  https://your-siem/ingest">
+                <div class="form-text">
+                  Works with Slack, n8n, Zapier, Grafana Loki, Splunk HEC, or any custom endpoint.
+                </div>
+              </div>
+              <div class="row g-3 mb-3">
+                <div class="col-md-3">
+                  <label class="form-label">Min Level</label>
+                  <select name="level" class="form-select bg-dark border-secondary text-light">
+                    {% for lvl in ['DEBUG','INFO','WARNING','ERROR','CRITICAL'] %}
+                    <option value="{{ lvl }}" {{ 'selected' if cfg.log_forwarding.webhook.level == lvl }}>{{ lvl }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Timeout (s)</label>
+                  <input type="number" step="0.5" name="timeout_seconds" min="1" max="30"
+                         class="form-control bg-dark border-secondary text-light"
+                         value="{{ cfg.log_forwarding.webhook.timeout_seconds }}">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Batch Size</label>
+                  <input type="number" name="batch_size" min="1" max="500"
+                         class="form-control bg-dark border-secondary text-light"
+                         value="{{ cfg.log_forwarding.webhook.batch_size }}">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Flush Interval (s)</label>
+                  <input type="number" step="0.5" name="batch_interval_seconds" min="1" max="60"
+                         class="form-control bg-dark border-secondary text-light"
+                         value="{{ cfg.log_forwarding.webhook.batch_interval_seconds }}">
+                </div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Custom HTTP Headers <span class="text-muted small">(one per line, <code>Name: Value</code>)</span></label>
+                <textarea name="headers_raw" rows="3"
+                          class="form-control bg-dark border-secondary text-light font-monospace small"
+                          placeholder="Authorization: Bearer my-token&#10;X-Custom: value">{% for k, v in cfg.log_forwarding.webhook.headers.items() %}{{ k }}: {{ v }}
+{% endfor %}</textarea>
+              </div>
+              <span class="test-result text-muted small" id="webhook-result"></span>
+            </div>
+            <div class="card-footer border-secondary">
+              <button type="submit" class="btn btn-sm btn-info">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+    </div><!-- /row -->
+  </div><!-- /tab-logfwd -->
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Test buttons on Log Forwarding tab — fire a JSON request, show inline result
+document.querySelectorAll('.test-btn').forEach(btn => {
+  btn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const target = btn.dataset.target;
+    const resultEl = document.getElementById(target + '-result');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+    try {
+      const resp = await fetch('/settings/test-log/' + target, { method: 'POST' });
+      const data = await resp.json();
+      if (resultEl) {
+        resultEl.className = 'ms-2 small ' + (data.ok ? 'text-success' : 'text-danger');
+        resultEl.textContent = data.message;
+      }
+    } catch (err) {
+      if (resultEl) {
+        resultEl.className = 'ms-2 small text-danger';
+        resultEl.textContent = 'Request failed: ' + err;
+      }
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-send me-1"></i>Test';
+    }
+  });
+});
+</script>
+{% endblock %}
+

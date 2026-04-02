@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}TACACS+ Clients{% endblock %}
+{% block page_title %}TACACS+ Device Clients{% endblock %}
+
+{% block content %}
+{% if saved %}<div class="alert alert-success alert-dismissible fade show">Client saved. <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>{% endif %}
+{% if error %}<div class="alert alert-danger alert-dismissible fade show">{{ error }} <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>{% endif %}
+
+<div class="alert alert-secondary small mb-3">
+  <i class="bi bi-info-circle me-1"></i>
+  Configure routers and switches that will authenticate via TACACS+ (TCP port 49). Clients are loaded at startup — restart after changes: <code>sudo systemctl restart raspise</code>
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <span class="text-muted small">{{ clients|length }} device(s)</span>
+  <button class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#addModal">
+    <i class="bi bi-plus-circle me-1"></i>Add Device
+  </button>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0">
+      <thead class="table-dark">
+        <tr>
+          <th>Name</th>
+          <th>IP Address</th>
+          <th>Key</th>
+          <th>Description</th>
+          <th class="text-center">Status</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in clients %}
+        <tr class="{{ '' if c.enabled else 'opacity-50' }}">
+          <td class="font-monospace fw-semibold">{{ c.name }}</td>
+          <td class="font-monospace">{{ c.ip_address }}</td>
+          <td>
+            <span class="font-monospace text-muted secret-text" data-val="{{ c.key }}">••••••••</span>
+            <button class="btn btn-sm btn-link p-0 ms-1 text-secondary reveal-btn" title="Show/hide">
+              <i class="bi bi-eye"></i>
+            </button>
+          </td>
+          <td class="text-muted small">{{ c.description or '—' }}</td>
+          <td class="text-center">
+            {% if c.enabled %}
+            <span class="badge bg-success">Enabled</span>
+            {% else %}
+            <span class="badge bg-secondary">Disabled</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            <form method="post" action="/tacacs-clients/{{ c.id }}/toggle" class="d-inline">
+              <button class="btn btn-sm btn-outline-secondary" title="{{ 'Disable' if c.enabled else 'Enable' }}">
+                <i class="bi bi-toggle-{{ 'on text-success' if c.enabled else 'off' }}"></i>
+              </button>
+            </form>
+            <form method="post" action="/tacacs-clients/{{ c.id }}/delete" class="d-inline"
+                  onsubmit="return confirm('Delete {{ c.name }}?')">
+              <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-center text-muted py-4">No TACACS+ clients configured.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add Device Modal -->
+<div class="modal fade" id="addModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content bg-dark border-secondary">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title"><i class="bi bi-terminal me-2"></i>Add TACACS+ Device</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" action="/tacacs-clients">
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Device Name <span class="text-danger">*</span></label>
+            <input type="text" name="name" required class="form-control bg-dark border-secondary text-light"
+                   placeholder="e.g. core-switch">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">IP Address <span class="text-danger">*</span></label>
+            <input type="text" name="ip_address" required class="form-control bg-dark border-secondary text-light"
+                   placeholder="e.g. 192.168.1.254">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Shared Key <span class="text-danger">*</span></label>
+            <input type="password" name="key" required class="form-control bg-dark border-secondary text-light"
+                   placeholder="TACACS+ shared key">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Description</label>
+            <input type="text" name="description" class="form-control bg-dark border-secondary text-light"
+                   placeholder="e.g. Cisco 3750G core switch">
+          </div>
+        </div>
+        <div class="modal-footer border-secondary">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-info">Add Device</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll('.reveal-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const span = btn.previousElementSibling;
+    if (span.textContent === '••••••••') {
+      span.textContent = span.dataset.val;
+      btn.querySelector('i').className = 'bi bi-eye-slash';
+    } else {
+      span.textContent = '••••••••';
+      btn.querySelector('i').className = 'bi bi-eye';
+    }
+  });
+});
+</script>
+{% endblock %}

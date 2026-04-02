@@ -1,0 +1,111 @@
+/* RaspISE Admin UI — custom styles */
+
+:root {
+  --sidebar-width: 230px;
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sidebar-width);
+  min-height: 100vh;
+  background: rgba(255,255,255,0.03);
+  border-right: 1px solid rgba(255,255,255,0.08);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+/* Sidebar section labels */
+.nav-section-label {
+  list-style: none;
+  font-size: .65rem;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,.3);
+  padding: .2rem .75rem;
+  pointer-events: none;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+}
+
+.sidebar .nav-link {
+  color: rgba(255,255,255,0.6);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  transition: background 0.15s, color 0.15s;
+}
+.sidebar .nav-link:hover {
+  background: rgba(255,255,255,0.07);
+  color: rgba(255,255,255,0.9);
+}
+.sidebar .nav-link.active {
+  background: rgba(13,202,240,0.15);
+  color: #0dcaf0;
+}
+
+/* ── Topbar ── */
+.topbar {
+  background: rgba(255,255,255,0.02);
+  min-height: 48px;
+}
+
+/* ── Main content ── */
+.main-content {
+  min-width: 0;
+  background: #0d1117;
+}
+
+/* ── Stat cards ── */
+.stat-card {
+  background: rgba(255,255,255,0.04);
+  border-width: 1px !important;
+  transition: transform 0.15s;
+}
+.stat-card:hover { transform: translateY(-2px); }
+.stat-icon {
+  font-size: 1.8rem;
+  opacity: 0.7;
+}
+
+/* ── Tables ── */
+.table {
+  --bs-table-bg: transparent;
+}
+.table-secondary {
+  --bs-table-color: #adb5bd;
+  --bs-table-bg: rgba(255,255,255,0.05);
+}
+
+/* ── Alerts (subtle variants) ── */
+.alert-warning-subtle  { background: rgba(255,193,7,.08);  color: #ffc107; }
+.alert-info-subtle     { background: rgba(13,202,240,.08); color: #0dcaf0; }
+.alert-success-subtle  { background: rgba(25,135,84,.08);  color: #198754; }
+
+/* ── Badges ── */
+.bg-success-subtle  { background: rgba(25,135,84,0.15)   !important; }
+.bg-danger-subtle   { background: rgba(220,53,69,0.15)   !important; }
+.bg-warning-subtle  { background: rgba(255,193,7,0.15)   !important; }
+.bg-info-subtle     { background: rgba(13,202,240,0.15)  !important; }
+.bg-primary-subtle  { background: rgba(13,110,253,0.15)  !important; }
+.bg-secondary-subtle{ background: rgba(108,117,125,0.15) !important; }
+.bg-dark            { background: rgba(33,37,41,0.8)     !important; }
+
+.text-success { color: #4ade80 !important; }
+.text-danger  { color: #f87171 !important; }
+.text-info    { color: #38bdf8 !important; }
+.text-warning { color: #facc15 !important; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+
+/* ── Utility ── */
+.font-monospace-data td { font-family: 'Consolas', monospace; font-size: 0.8rem; }
+.btn-xs { padding: 2px 6px; font-size: 0.75rem; }

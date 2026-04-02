@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspISE — You're Connected!</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff;
+    }
+    .card {
+      background: rgba(255,255,255,0.07);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 16px;
+      padding: 40px 36px;
+      width: 100%; max-width: 420px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+      text-align: center;
+    }
+    .checkmark { font-size: 3.5rem; margin-bottom: 16px; }
+    h1 { font-size: 1.8rem; margin-bottom: 8px; color: #4ade80; }
+    p.sub { color: rgba(255,255,255,0.65); margin-bottom: 28px; }
+    .ssid-badge {
+      display: inline-block;
+      background: rgba(74,222,128,0.15);
+      border: 1px solid rgba(74,222,128,0.4);
+      color: #4ade80;
+      border-radius: 20px;
+      padding: 5px 18px;
+      font-size: 0.9rem;
+      margin-bottom: 24px;
+      font-weight: 600;
+    }
+    .divider { border: 1px solid rgba(255,255,255,0.1); margin: 24px 0; }
+    .qr-section h3 { font-size: 1rem; color: rgba(255,255,255,0.8); margin-bottom: 14px; }
+    .qr-img {
+      background: white;
+      border-radius: 12px;
+      padding: 12px;
+      display: inline-block;
+      margin-bottom: 10px;
+    }
+    .qr-img img { width: 180px; height: 180px; display: block; }
+    .qr-hint { font-size: 0.78rem; color: rgba(255,255,255,0.45); margin-top: 6px; }
+    .footer  { font-size: 0.78rem; color: rgba(255,255,255,0.35); margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="checkmark">✅</div>
+    <h1>You're Connected!</h1>
+    <p class="sub">Your guest session is now active. Enjoy your browsing.</p>
+
+    <span class="ssid-badge">📶 {{ ssid }}</span>
+
+    {% if qr_base64 %}
+    <div class="divider"></div>
+    <div class="qr-section">
+      <h3>Share Wi-Fi  —  Scan to connect other devices</h3>
+      <div class="qr-img">
+        <img src="data:image/png;base64,{{ qr_base64 }}" alt="Wi-Fi QR Code">
+      </div>
+      <p class="qr-hint">Point your camera at the QR code to join automatically</p>
+    </div>
+    {% endif %}
+
+    <div class="footer">Powered by RaspISE</div>
+  </div>
+</body>
+</html>

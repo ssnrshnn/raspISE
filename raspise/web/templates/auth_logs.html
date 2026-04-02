@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Auth Logs{% endblock %}
+{% block page_title %}Authentication Logs{% endblock %}
+
+{% block content %}
+<!-- Filter bar -->
+<div class="d-flex gap-2 mb-3">
+  <a href="/logs" class="btn btn-sm {% if not filter_result %}btn-secondary{% else %}btn-outline-secondary{% endif %}">All</a>
+  <a href="/logs?result=SUCCESS" class="btn btn-sm {% if filter_result == 'SUCCESS' %}btn-success{% else %}btn-outline-success{% endif %}">Success</a>
+  <a href="/logs?result=FAILURE" class="btn btn-sm {% if filter_result == 'FAILURE' %}btn-danger{% else %}btn-outline-danger{% endif %}">Failure</a>
+  <span class="ms-auto text-muted small align-self-center">{{ total }} total events</span>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 small align-middle font-monospace-data">
+      <thead class="table-secondary">
+        <tr>
+          <th>Timestamp</th><th>Username</th><th>MAC</th>
+          <th>NAS IP</th><th>Method</th><th>Result</th>
+          <th>Policy</th><th>VLAN</th><th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td class="text-muted">{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+          <td>{{ log.username or '—' }}</td>
+          <td class="font-monospace small">{{ log.mac_address or '—' }}</td>
+          <td class="font-monospace small">{{ log.nas_ip or '—' }}</td>
+          <td><span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">{{ log.auth_method }}</span></td>
+          <td>
+            {% if log.result == 'SUCCESS' %}
+              <span class="badge bg-success"><i class="bi bi-check-lg me-1"></i>Allow</span>
+            {% else %}
+              <span class="badge bg-danger"><i class="bi bi-x-lg me-1"></i>Deny</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ log.policy_name or '—' }}</td>
+          <td class="text-muted">{{ log.vlan or '—' }}</td>
+          <td class="text-muted small">{{ log.reason or '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-center text-muted py-4">No authentication events.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <!-- Pagination -->
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <a href="/logs?page={{ page - 1 }}{% if filter_result %}&result={{ filter_result }}{% endif %}"
+       class="btn btn-sm btn-outline-secondary {% if page <= 1 %}disabled{% endif %}">
+      ‹ Previous
+    </a>
+    <small class="text-muted">Page {{ page }} of {{ ((total / per_page)|int) + 1 }}</small>
+    <a href="/logs?page={{ page + 1 }}{% if filter_result %}&result={{ filter_result }}{% endif %}"
+       class="btn btn-sm btn-outline-secondary {% if logs|length < per_page %}disabled{% endif %}">
+      Next ›
+    </a>
+  </div>
+</div>
+{% endblock %}

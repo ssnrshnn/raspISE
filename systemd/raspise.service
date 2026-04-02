@@ -1,0 +1,49 @@
+[Unit]
+Description=RaspISE — Network Access Control Server
+Documentation=https://github.com/you/raspise
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=raspise
+Group=raspise
+
+# Runtime environment
+Environment=RASPISE_CONFIG=/etc/raspise/config.yaml
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# Main process
+ExecStart=/opt/raspise/venv/bin/raspise
+
+# Graceful reload (re-reads config)
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=raspise
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/raspise /var/log/raspise /tmp
+# Allow raw sockets for RADIUS/TACACS+ UDP/TCP (need CAP_NET_BIND_SERVICE for ports <1024)
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
+
+# Resource limits (Pi Zero 2W has 512 MB RAM)
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

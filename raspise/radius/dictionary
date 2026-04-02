@@ -1,0 +1,56 @@
+# Minimal RADIUS dictionary for RaspISE
+# Sourced from RFC 2865, 2866, 3580 — only the attributes we need.
+
+ATTRIBUTE    User-Name                      1    string
+ATTRIBUTE    User-Password                  2    octets
+ATTRIBUTE    CHAP-Password                  3    octets
+ATTRIBUTE    NAS-IP-Address                 4    ipaddr
+ATTRIBUTE    NAS-Port                       5    integer
+ATTRIBUTE    Service-Type                   6    integer
+ATTRIBUTE    Framed-Protocol                7    integer
+ATTRIBUTE    Framed-IP-Address              8    ipaddr
+ATTRIBUTE    Framed-IP-Netmask              9    ipaddr
+ATTRIBUTE    Filter-Id                      11   string
+ATTRIBUTE    Framed-MTU                     12   integer
+ATTRIBUTE    Reply-Message                  18   string
+ATTRIBUTE    State                          24   octets
+ATTRIBUTE    Class                          25   octets
+ATTRIBUTE    Session-Timeout                27   integer
+ATTRIBUTE    Idle-Timeout                   28   integer
+ATTRIBUTE    Called-Station-Id              30   string
+ATTRIBUTE    Calling-Station-Id             31   string
+ATTRIBUTE    NAS-Identifier                 32   string
+ATTRIBUTE    Proxy-State                    33   octets
+ATTRIBUTE    NAS-Port-Type                  61   integer
+ATTRIBUTE    Tunnel-Type                    64   integer  has_tag
+ATTRIBUTE    Tunnel-Medium-Type             65   integer  has_tag
+ATTRIBUTE    Tunnel-Private-Group-Id        81   string   has_tag
+ATTRIBUTE    Acct-Status-Type               40   integer
+ATTRIBUTE    Acct-Session-Id                44   string
+ATTRIBUTE    Acct-Session-Time              46   integer
+ATTRIBUTE    Acct-Input-Octets              42   integer
+ATTRIBUTE    Acct-Output-Octets             43   integer
+ATTRIBUTE    Acct-Terminate-Cause           49   integer
+ATTRIBUTE    Event-Timestamp                55   date
+ATTRIBUTE    CHAP-Challenge                 60   octets
+ATTRIBUTE    NAS-Port-Id                    87   string
+ATTRIBUTE    EAP-Message                    79   octets
+ATTRIBUTE    Message-Authenticator          80   octets
+ATTRIBUTE    Connect-Info                   77   string
+
+VALUE        Service-Type      Login                1
+VALUE        Service-Type      Framed               2
+VALUE        Service-Type      Authenticate-Only    8
+
+VALUE        Acct-Status-Type  Start                1
+VALUE        Acct-Status-Type  Stop                 2
+VALUE        Acct-Status-Type  Interim-Update       3
+VALUE        Acct-Status-Type  Accounting-On        7
+VALUE        Acct-Status-Type  Accounting-Off       8
+
+VALUE        NAS-Port-Type     Ethernet             15
+VALUE        NAS-Port-Type     Wireless-802.11      19
+
+VALUE        Tunnel-Type       PPTP                 1
+VALUE        Tunnel-Type       L2TP                 3
+VALUE        Tunnel-Type       VLAN                 13

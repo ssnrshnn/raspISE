@@ -1,0 +1,134 @@
+# RaspISE — main configuration file
+# Copy this to config.yaml and edit before first launch.
+
+server:
+  name: "RaspISE-01"
+  secret_key: "CHANGE_ME_USE_A_STRONG_RANDOM_STRING"   # used for JWT + session signing
+  debug: false
+  log_level: "INFO"          # DEBUG | INFO | WARNING | ERROR
+  log_file: "/var/log/raspise/raspise.log"
+
+database:
+  url: "sqlite+aiosqlite:////var/lib/raspise/raspise.db"
+
+# ── RADIUS ────────────────────────────────────────────────────────────────────
+radius:
+  enabled: true
+  host: "0.0.0.0"
+  auth_port: 1812
+  acct_port: 1813
+  # List every NAS (switch/AP/VPN) that may send RADIUS requests
+  clients:
+    - name: "main-switch"
+      address: "192.168.1.1"
+      secret: "radius_secret_here"
+    - name: "wifi-ap"
+      address: "192.168.1.2"
+      secret: "radius_secret_here"
+  # Default VLAN IDs returned in Access-Accept
+  default_vlan: 10
+  guest_vlan: 20
+  reject_vlan: 99
+
+# ── TACACS+ ───────────────────────────────────────────────────────────────────
+tacacs:
+  enabled: true
+  host: "0.0.0.0"
+  port: 49
+  key: "tacacs_secret_here"
+  clients:
+    - address: "192.168.1.1"
+      key: "tacacs_secret_here"
+
+# ── Admin Web UI ──────────────────────────────────────────────────────────────
+web:
+  host: "0.0.0.0"
+  port: 8080
+  # Initial admin credentials (changed on first login)
+  admin_username: "admin"
+  admin_password: "RaspISE@admin1"
+
+# ── REST API ──────────────────────────────────────────────────────────────────
+api:
+  host: "0.0.0.0"
+  port: 8081
+  token_expire_minutes: 60
+
+# ── Captive / Guest Portal ────────────────────────────────────────────────────
+portal:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8082
+  redirect_url: "http://raspise.local:8082"
+  session_hours: 8          # guest session validity
+  # Wireless SSID shown in QR code (informational only)
+  guest_ssid: "RaspISE-Guest"
+  guest_psk: "guest_password_here"
+
+# ── Device Profiler ───────────────────────────────────────────────────────────
+profiler:
+  enabled: true
+  listen_interface: "eth0"   # interface for DHCP/ARP sniffing
+  oui_db: "/var/lib/raspise/oui.csv"
+
+# ── TFT Display ───────────────────────────────────────────────────────────────
+display:
+  enabled: true
+  driver: "ili9341"          # ili9341 | st7789 | simulation
+  spi_port: 0
+  spi_device: 0
+  dc_pin: 24
+  rst_pin: 25
+  backlight_pin: 18
+  rotation: 0               # 0 | 90 | 180 | 270
+  brightness: 100           # 0–100 %
+  # How many seconds to show each screen before cycling
+  screen_cycle_seconds: 5
+  screens:
+    - auth_log
+    - stats
+    - sessions
+    - network
+    - qr_code
+
+# ── Log Forwarding ────────────────────────────────────────────────────────────
+# All targets are independent and can be enabled simultaneously.
+log_forwarding:
+
+  # ── Syslog ──────────────────────────────────────────────────────────────────
+  # Send to local syslog daemon (e.g. rsyslog / journald) or a remote server.
+  syslog:
+    enabled: false
+    # Local Unix socket (most Linux systems):
+    address: "/dev/log"
+    # For remote syslog, set address to "host:port" or just "host",
+    # e.g. address: "192.168.1.50:514"
+    facility: "local0"       # local0–local7 | daemon | auth | syslog
+    protocol: "udp"          # udp | tcp  (only matters for remote syslog)
+    port: 514                # used when address is a hostname without port
+
+  # ── Graylog / GELF ──────────────────────────────────────────────────────────
+  # Graylog Extended Log Format — compatible with Graylog, Logstash GELF input,
+  # and any GELF-capable log aggregator.
+  graylog:
+    enabled: false
+    host: "192.168.1.100"
+    port: 12201              # default GELF UDP input port
+    protocol: "udp"          # udp | tcp
+
+  # ── Webhook ─────────────────────────────────────────────────────────────────
+  # HTTP POST batches of JSON log records to any URL.
+  # Works with: Slack incoming webhooks, Grafana Loki, n8n, Zapier,
+  #             custom SIEM endpoints, Splunk HEC, etc.
+  webhook:
+    enabled: false
+    url: ""                  # e.g. "https://hooks.slack.com/services/xxx/yyy/zzz"
+    level: "WARNING"         # minimum level to forward: DEBUG|INFO|WARNING|ERROR|CRITICAL
+    timeout_seconds: 3.0
+    batch_size: 10           # how many log records to collect before sending
+    batch_interval_seconds: 5.0
+    # Optional extra headers (e.g. for auth tokens / Splunk HEC token):
+    headers: {}
+    # headers:
+    #   Authorization: "Bearer my-token"
+    #   X-Custom-Header: "value"

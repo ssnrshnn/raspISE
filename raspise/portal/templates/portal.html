@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspISE — Guest Network Access</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff;
+    }
+    .card {
+      background: rgba(255,255,255,0.07);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 16px;
+      padding: 40px 36px;
+      width: 100%; max-width: 420px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    .logo {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .logo svg { width: 52px; height: 52px; }
+    h1 { font-size: 1.6rem; margin-bottom: 6px; text-align: center; }
+    p.sub { font-size: 0.9rem; color: rgba(255,255,255,0.65); text-align: center; margin-bottom: 28px; }
+    .ssid-badge {
+      display: inline-block;
+      background: rgba(0,212,255,0.15);
+      border: 1px solid rgba(0,212,255,0.4);
+      color: #00d4ff;
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 0.85rem;
+      margin-bottom: 8px;
+    }
+    label { display: block; font-size: 0.85rem; color: rgba(255,255,255,0.75); margin-bottom: 5px; }
+    input[type=text], input[type=email] {
+      width: 100%; padding: 12px 14px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      color: #fff;
+      font-size: 1rem;
+      margin-bottom: 18px;
+      transition: border-color 0.2s;
+    }
+    input:focus { outline: none; border-color: #00d4ff; }
+    .error-msg {
+      background: rgba(255,59,59,0.18);
+      border: 1px solid rgba(255,59,59,0.45);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 0.88rem;
+      color: #ff8080;
+      margin-bottom: 16px;
+    }
+    button[type=submit] {
+      width: 100%; padding: 13px;
+      background: linear-gradient(90deg, #00b4db, #0083b0);
+      border: none; border-radius: 8px;
+      color: #fff; font-size: 1rem; font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.88; }
+    .privacy { font-size: 0.78rem; color: rgba(255,255,255,0.45); text-align: center; margin-top: 16px; }
+    .network-info { font-size: 0.82rem; color: rgba(255,255,255,0.5); text-align: center; margin-top: 20px; }
+    .network-info span { color: rgba(255,255,255,0.8); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <svg viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="26" cy="26" r="25" stroke="#00d4ff" stroke-width="2"/>
+        <path d="M14 26 Q26 10 38 26 Q26 42 14 26Z" fill="none" stroke="#00d4ff" stroke-width="1.5"/>
+        <circle cx="26" cy="26" r="4" fill="#00d4ff"/>
+        <path d="M10 20 Q26 6 42 20" stroke="rgba(0,212,255,0.4)" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <path d="M7 26 Q26 2 45 26" stroke="rgba(0,212,255,0.2)" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <div style="text-align:center; margin-bottom: 20px;">
+      <span class="ssid-badge">📶 {{ ssid }}</span>
+    </div>
+    <h1>Guest Network Access</h1>
+    <p class="sub">Register below to get free internet access for today.</p>
+
+    {% if error %}
+    <div class="error-msg">⚠ {{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/register">
+      <input type="hidden" name="mac"      value="{{ mac }}">
+      <input type="hidden" name="redirect" value="{{ redirect }}">
+
+      <label for="full_name">Full Name</label>
+      <input type="text" id="full_name" name="full_name"
+             placeholder="e.g. Jane Doe" required maxlength="128"
+             autocomplete="name">
+
+      <label for="email">Email Address</label>
+      <input type="email" id="email" name="email"
+             placeholder="jane@example.com" required maxlength="128"
+             autocomplete="email">
+
+      <button type="submit">Get Access →</button>
+    </form>
+
+    <p class="privacy">
+      Your information is only used to manage network access and is not shared with third parties.
+    </p>
+    <p class="network-info">Powered by <span>RaspISE</span></p>
+  </div>
+</body>
+</html>

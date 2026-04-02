@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Guests{% endblock %}
+{% block page_title %}Guest Sessions{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 small align-middle">
+      <thead class="table-secondary">
+        <tr><th>Name</th><th>Email</th><th>MAC</th><th>IP</th><th>Created</th><th>Expires</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for s in sessions %}
+        <tr>
+          <td>{{ s.full_name or '—' }}</td>
+          <td class="text-muted">{{ s.email or '—' }}</td>
+          <td class="font-monospace small">{{ s.mac_address or '—' }}</td>
+          <td class="font-monospace small">{{ s.ip_address or '—' }}</td>
+          <td class="text-muted small">{{ s.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td class="text-muted small">{{ s.expires_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td>
+            {% if s.active and s.expires_at > now %}
+              <span class="badge bg-success-subtle text-success border border-success-subtle">Active</span>
+            {% elif not s.active %}
+              <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">Revoked</span>
+            {% else %}
+              <span class="badge bg-warning-subtle text-warning border border-warning-subtle">Expired</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-center text-muted py-4">No guest sessions yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

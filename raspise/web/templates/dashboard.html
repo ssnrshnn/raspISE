@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<!-- ── Stats row ─────────────────────────────────────────────────────────── -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-xl-3">
+    <div class="card stat-card border-info">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <p class="text-muted small mb-1">Total Users</p>
+            <h3 class="mb-0 fw-bold">{{ stats.total_users }}</h3>
+          </div>
+          <span class="stat-icon text-info"><i class="bi bi-people-fill"></i></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="card stat-card border-warning">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <p class="text-muted small mb-1">Devices Seen</p>
+            <h3 class="mb-0 fw-bold">{{ stats.total_devices }}</h3>
+          </div>
+          <span class="stat-icon text-warning"><i class="bi bi-hdd-network-fill"></i></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="card stat-card border-success">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <p class="text-muted small mb-1">Active Sessions</p>
+            <h3 class="mb-0 fw-bold">{{ stats.active_sessions }}</h3>
+          </div>
+          <span class="stat-icon text-success"><i class="bi bi-activity"></i></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="card stat-card border-secondary">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <p class="text-muted small mb-1">Guest Sessions</p>
+            <h3 class="mb-0 fw-bold">{{ stats.guest_active }}</h3>
+          </div>
+          <span class="stat-icon text-secondary"><i class="bi bi-person-badge-fill"></i></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Charts row ────────────────────────────────────────────────────────── -->
+<div class="row g-3 mb-4">
+  <div class="col-md-5">
+    <div class="card h-100">
+      <div class="card-header">Auth Results Today</div>
+      <div class="card-body d-flex align-items-center justify-content-center">
+        <canvas id="authPie" style="max-height:220px"></canvas>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-7">
+    <div class="card h-100">
+      <div class="card-header">Auth Summary</div>
+      <div class="card-body">
+        <div class="d-flex flex-column gap-3 mt-2">
+          <div>
+            <div class="d-flex justify-content-between mb-1">
+              <small class="text-success">Success</small>
+              <small>{{ stats.auth_success }} / {{ stats.auth_today }}</small>
+            </div>
+            <div class="progress" style="height:8px">
+              <div class="progress-bar bg-success" style="width:{% if stats.auth_today %}{{ (stats.auth_success / stats.auth_today * 100)|int }}{% else %}0{% endif %}%"></div>
+            </div>
+          </div>
+          <div>
+            <div class="d-flex justify-content-between mb-1">
+              <small class="text-danger">Failure</small>
+              <small>{{ stats.auth_failure }} / {{ stats.auth_today }}</small>
+            </div>
+            <div class="progress" style="height:8px">
+              <div class="progress-bar bg-danger" style="width:{% if stats.auth_today %}{{ (stats.auth_failure / stats.auth_today * 100)|int }}{% else %}0{% endif %}%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Recent auth events ─────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Recent Authentication Events</span>
+    <a href="/logs" class="btn btn-sm btn-outline-secondary">View All</a>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 small">
+      <thead class="table-secondary">
+        <tr>
+          <th>Time</th><th>User / MAC</th><th>NAS IP</th>
+          <th>Method</th><th>Result</th><th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in recent_logs %}
+        <tr>
+          <td class="text-muted">{{ log.timestamp.strftime('%H:%M:%S') }}</td>
+          <td>
+            <div>{{ log.username or '—' }}</div>
+            <small class="text-muted font-monospace">{{ log.mac_address or '' }}</small>
+          </td>
+          <td class="font-monospace">{{ log.nas_ip or '—' }}</td>
+          <td><span class="badge bg-secondary">{{ log.auth_method }}</span></td>
+          <td>
+            {% if log.result == 'SUCCESS' %}
+              <span class="badge bg-success">✓ Allow</span>
+            {% else %}
+              <span class="badge bg-danger">✗ Deny</span>
+            {% endif %}
+          </td>
+          <td class="text-muted">{{ log.reason or '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-center text-muted py-4">No authentication events yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+new Chart(document.getElementById('authPie'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Success', 'Failure'],
+    datasets: [{
+      data: [{{ stats.auth_success }}, {{ stats.auth_failure }}],
+      backgroundColor: ['#198754', '#dc3545'],
+      borderWidth: 2,
+      borderColor: '#212529',
+    }]
+  },
+  options: {
+    plugins: { legend: { labels: { color: '#adb5bd' } } },
+    cutout: '65%',
+  }
+});
+</script>
+{% endblock %}

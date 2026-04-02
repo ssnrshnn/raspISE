@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}System{% endblock %}
+{% block page_title %}System Status{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+
+  <!-- Service Status -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-activity me-2"></i>Services</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead class="table-dark">
+            <tr><th>Service</th><th class="text-center">Status</th><th class="text-end">Action</th></tr>
+          </thead>
+          <tbody>
+            {% for svc in services %}
+            <tr>
+              <td class="font-monospace">{{ svc.name }}</td>
+              <td class="text-center">
+                {% if svc.status == 'active' %}
+                  <span class="badge bg-success"><i class="bi bi-circle-fill me-1" style="font-size:.5rem"></i>Running</span>
+                {% elif svc.status == 'inactive' %}
+                  <span class="badge bg-secondary">Stopped</span>
+                {% elif svc.status == 'failed' %}
+                  <span class="badge bg-danger">Failed</span>
+                {% else %}
+                  <span class="badge bg-secondary">{{ svc.status }}</span>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <form method="post" action="/system/service/{{ svc.name }}/restart" class="d-inline">
+                  <button class="btn btn-sm btn-outline-warning" title="Restart"
+                         onclick="return confirm('Restart {{ svc.name }}?')">
+                    <i class="bi bi-arrow-clockwise"></i>
+                  </button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hardware stats -->
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-cpu me-2"></i>Hardware</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <div class="d-flex justify-content-between mb-1">
+            <small>CPU</small><small>{{ cpu_percent }}%</small>
+          </div>
+          <div class="progress" style="height:6px">
+            <div class="progress-bar {% if cpu_percent > 80 %}bg-danger{% elif cpu_percent > 60 %}bg-warning{% else %}bg-info{% endif %}"
+                 style="width:{{ cpu_percent }}%"></div>
+          </div>
+        </div>
+        <div class="mb-3">
+          <div class="d-flex justify-content-between mb-1">
+            <small>RAM</small>
+            <small>{{ "%.0f"|format(mem.used / 1048576) }} / {{ "%.0f"|format(mem.total / 1048576) }} MB</small>
+          </div>
+          <div class="progress" style="height:6px">
+            <div class="progress-bar {% if mem.percent > 85 %}bg-danger{% elif mem.percent > 65 %}bg-warning{% else %}bg-success{% endif %}"
+                 style="width:{{ mem.percent }}%"></div>
+          </div>
+        </div>
+        <div class="mb-3">
+          <div class="d-flex justify-content-between mb-1">
+            <small>Disk</small>
+            <small>{{ "%.1f"|format(disk.used / 1073741824) }} / {{ "%.1f"|format(disk.total / 1073741824) }} GB</small>
+          </div>
+          <div class="progress" style="height:6px">
+            <div class="progress-bar {% if disk.percent > 90 %}bg-danger{% elif disk.percent > 70 %}bg-warning{% else %}bg-secondary{% endif %}"
+                 style="width:{{ disk.percent }}%"></div>
+          </div>
+        </div>
+        {% if temperature %}
+        <div class="d-flex justify-content-between text-muted small mt-2">
+          <span><i class="bi bi-thermometer-half me-1"></i>Temperature</span>
+          <span class="{{ 'text-danger' if temperature > 75 else 'text-success' }}">{{ temperature }}°C</span>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- DB / platform info -->
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-info-circle me-2"></i>Instance Info</div>
+      <div class="card-body">
+        <table class="table table-sm mb-0 small">
+          <tr><td class="text-muted">Platform</td><td class="font-monospace">{{ platform }}</td></tr>
+          <tr><td class="text-muted">Python</td><td class="font-monospace">{{ python_ver }}</td></tr>
+          <tr><td class="text-muted">DB Size</td><td>{{ "%.1f"|format(db_size / 1024) }} KB</td></tr>
+          <tr><td class="text-muted">Total Auth Logs</td><td>{{ total_logs }}</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent journal log -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-journal-code me-2"></i>Recent Service Log (raspise)</span>
+        <a href="/system" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</a>
+      </div>
+      <div class="card-body p-0">
+        <pre class="m-0 p-3 small" style="max-height:340px;overflow-y:auto;background:#0d1117;color:#a8b1c2;font-size:.75rem">{% for line in log_lines %}{{ line }}
+{% endfor %}</pre>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
