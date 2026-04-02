@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import psutil
 from PIL import Image, ImageDraw
 
+from raspise.config import get_config
 from raspise.display.manager import (
     BaseScreen, C, FONT_SM, FONT_MD, FONT_LG, FONT_XL, W, H
 )
@@ -315,7 +316,6 @@ _SCREEN_MAP: dict[str, type[BaseScreen]] = {
 
 def build_screens() -> list[BaseScreen]:
     cfg = get_config().display
-    from raspise.config import get_config
     screens = []
     for name in cfg.screens:
         cls = _SCREEN_MAP.get(name)
