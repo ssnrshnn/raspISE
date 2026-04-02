@@ -234,15 +234,14 @@ class RaspISERadiusServer(pyrad.server.Server):
     # ---- DB helpers (run from sync context via _run_sync) ----
 
     async def _check_user_password(self, username: str, password: str) -> tuple[AuthResult, str]:
-        from passlib.context import CryptContext
-        pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        import bcrypt
         async with AsyncSessionLocal() as db:
             from sqlalchemy import select
             stmt = select(User).where(User.username == username, User.enabled == True)
             row = (await db.execute(stmt)).scalar_one_or_none()
             if row is None:
                 return AuthResult.FAILURE, "Unknown user"
-            if not pwd_ctx.verify(password, row.password_hash):
+            if not bcrypt.checkpw(password.encode(), row.password_hash.encode()):
                 return AuthResult.FAILURE, "Wrong password"
             return AuthResult.SUCCESS, ""
 

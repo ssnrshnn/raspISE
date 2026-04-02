@@ -416,15 +416,14 @@ class TacacsSession:
 # ---------------------------------------------------------------------------
 
 async def _verify_user(username: str, password: str) -> bool:
-    from passlib.context import CryptContext
-    pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    import bcrypt
     async with AsyncSessionLocal() as db:
         from sqlalchemy import select
         stmt = select(User).where(User.username == username, User.enabled == True)
         user = (await db.execute(stmt)).scalar_one_or_none()
         if user is None:
             return False
-        return pwd_ctx.verify(password, user.password_hash)
+        return bcrypt.checkpw(password.encode(), user.password_hash.encode())
 
 
 async def _is_user_authorized(username: str, priv_lvl: int, command: str) -> bool:
