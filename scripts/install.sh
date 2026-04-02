@@ -134,12 +134,15 @@ netfilter-persistent save 2>/dev/null || warn "netfilter-persistent save failed"
 # ─── 11. First run ────────────────────────────────────────────────────────────
 info "Initialising database…"
 RASPISE_CONFIG="$CONFIG_DIR/config.yaml" \
+  PYTHONPATH="$RASPISE_DIR" \
   "$VENV/bin/python" -c "
 import asyncio
 from raspise.db import init_db
 asyncio.run(init_db())
 print('Database initialised.')
 "
+# Fix ownership so the raspise service user can write the database
+chown -R "$RASPISE_USER:$RASPISE_USER" "$DATA_DIR"
 
 # ─── 12. Optional FreeRADIUS (EAP-PEAP / EAP-TLS) ───────────────────────────
 echo ""
