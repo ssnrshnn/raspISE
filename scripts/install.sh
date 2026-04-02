@@ -59,7 +59,7 @@ fi
 # ─── 4. Create directories ────────────────────────────────────────────────────
 info "Creating directories…"
 mkdir -p "$RASPISE_DIR" "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
-chown "$RASPISE_USER:$RASPISE_USER" "$DATA_DIR" "$LOG_DIR"
+chown "$RASPISE_USER:$RASPISE_USER" "$DATA_DIR" "$LOG_DIR" "$CONFIG_DIR"
 
 # ─── logrotate config ─────────────────────────────────────────────────────────
 info "Installing logrotate config…"
@@ -101,8 +101,18 @@ if [[ ! -f "$CONFIG_DIR/config.yaml" ]]; then
 else
   warn "Config already exists at $CONFIG_DIR/config.yaml — not overwriting."
 fi
-chown root:"$RASPISE_USER" "$CONFIG_DIR/config.yaml"
-chmod 640 "$CONFIG_DIR/config.yaml"
+chown "$RASPISE_USER:$RASPISE_USER" "$CONFIG_DIR/config.yaml"
+chmod 600 "$CONFIG_DIR/config.yaml"
+
+# ─── Sudoers rule — allow raspise user to restart only known services ─────────
+info "Installing sudoers rule…"
+cat > /etc/sudoers.d/raspise << 'EOF'
+# RaspISE — allow the service user to restart only its own services
+raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart raspise
+raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart raspise-display
+raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart freeradius
+EOF
+chmod 440 /etc/sudoers.d/raspise
 
 # ─── 8. Download OUI database ─────────────────────────────────────────────────
 info "Downloading IEEE OUI database…"

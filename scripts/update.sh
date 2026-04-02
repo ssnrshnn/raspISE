@@ -41,6 +41,20 @@ mkdir -p /var/log/raspise
 chown raspise:raspise /var/log/raspise 2>/dev/null || true
 cp "$RASPISE_DIR/scripts/raspise.logrotate" /etc/logrotate.d/raspise 2>/dev/null || true
 
+# Ensure config dir + file are writable by the service user
+chown raspise:raspise /etc/raspise 2>/dev/null || true
+chown raspise:raspise /etc/raspise/config.yaml 2>/dev/null || true
+chmod 600 /etc/raspise/config.yaml 2>/dev/null || true
+
+# Ensure sudoers rule is in place for service restart button
+cat > /etc/sudoers.d/raspise << 'EOF'
+# RaspISE — allow the service user to restart only its own services
+raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart raspise
+raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart raspise-display
+raspise ALL=(ALL) NOPASSWD: /bin/systemctl restart freeradius
+EOF
+chmod 440 /etc/sudoers.d/raspise
+
 info "Restarting raspise service…"
 systemctl daemon-reload
 systemctl restart raspise

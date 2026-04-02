@@ -35,11 +35,13 @@ StandardError=journal
 SyslogIdentifier=raspise
 
 # Security hardening
-NoNewPrivileges=yes
+# NoNewPrivileges is intentionally NOT set here so that the web UI can call
+# `sudo systemctl restart` for the limited set of services defined in
+# /etc/sudoers.d/raspise (installed by install.sh).
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/raspise /var/log/raspise /tmp
+ReadWritePaths=/var/lib/raspise /var/log/raspise /tmp /etc/raspise
 # Allow raw sockets for RADIUS/TACACS+ UDP/TCP (need CAP_NET_BIND_SERVICE for ports <1024)
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
