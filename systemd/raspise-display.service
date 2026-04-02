@@ -21,7 +21,6 @@ WorkingDirectory=/opt/raspise
 Environment=RASPISE_CONFIG=/etc/raspise/config.yaml
 Environment=PYTHONPATH=/opt/raspise
 Environment=PYTHONUNBUFFERED=1
-Environment=BLINKA_MCP2221=0
 
 # Main process
 ExecStart=/opt/raspise/venv/bin/python -m raspise.display_main

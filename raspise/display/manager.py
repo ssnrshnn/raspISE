@@ -143,6 +143,7 @@ class DisplayDriver:
         except Exception as exc:
             log.error("Display hardware init failed: %s — falling back to simulation", exc)
             self._driver = "simulation"
+            self._sim_path.mkdir(parents=True, exist_ok=True)
 
     def _init_ili9341(self, cfg) -> None:
         import board, busio, digitalio
