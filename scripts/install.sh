@@ -14,6 +14,12 @@ LOG_DIR="/var/log/raspise"
 VENV="$RASPISE_DIR/venv"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Flag: pass --with-freeradius to install FreeRADIUS non-interactively
+WITH_FREERADIUS=false
+for arg in "$@"; do
+  [[ "$arg" == "--with-freeradius" ]] && WITH_FREERADIUS=true
+done
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
@@ -133,6 +139,22 @@ from raspise.db import init_db
 asyncio.run(init_db())
 print('Database initialised.')
 "
+
+# ─── 12. Optional FreeRADIUS (EAP-PEAP / EAP-TLS) ───────────────────────────
+echo ""
+echo -e "${YELLOW}FreeRADIUS (EAP-PEAP/TLS) — optional${NC}"
+echo    "  The built-in RADIUS server handles PAP, CHAP and MAB out of the box."
+echo    "  FreeRADIUS is only needed if your clients use 802.1X EAP-PEAP or EAP-TLS"
+echo    "  (e.g. Windows domain laptops on Wi-Fi WPA2-Enterprise)."
+echo    "  It adds ~100 MB and an extra daemon — skip it if you don't need EAP."
+echo ""
+read -r -p "  Install FreeRADIUS for EAP-PEAP/TLS support? [y/N] " _fr_answer
+if [[ "$WITH_FREERADIUS" == true || "${_fr_answer,,}" =~ ^y ]]; then
+  info "Running FreeRADIUS integration setup…"
+  bash "$RASPISE_DIR/scripts/setup_freeradius.sh"
+else
+  info "Skipping FreeRADIUS — built-in RADIUS (PAP/CHAP/MAB) will be used."
+fi
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
 echo ""
