@@ -171,12 +171,30 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
             session_raw = request.cookies.get(_SESSION_COOKIE, "")
             if session_raw:
-                # Check form field or header
+                # Extract CSRF token from the raw body bytes so we don't
+                # consume the body stream — request.form() would exhaust
+                # the ASGI receive channel and leave downstream Form(...)
+                # parameters empty, causing "Field required" 422 errors.
                 content_type = request.headers.get("content-type", "")
                 csrf_token = ""
-                if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
-                    form = await request.form()
-                    csrf_token = form.get("csrf_token", "")
+                if "application/x-www-form-urlencoded" in content_type:
+                    from urllib.parse import parse_qs
+                    body = await request.body()
+                    params = parse_qs(body.decode("utf-8", errors="replace"))
+                    csrf_token = params.get("csrf_token", [""])[0]
+                elif "multipart/form-data" in content_type:
+                    # For multipart, read the raw body and search for the
+                    # csrf_token field.  We keep it simple: FormData parsing
+                    # via request.form() would consume the stream, so we
+                    # scan the raw bytes for the token value instead.
+                    body = await request.body()
+                    raw = body.decode("utf-8", errors="replace")
+                    import re
+                    m = re.search(
+                        r'name="csrf_token"\r?\n\r?\n([^\r\n-]+)', raw
+                    )
+                    if m:
+                        csrf_token = m.group(1).strip()
                 if not csrf_token:
                     csrf_token = request.headers.get("X-CSRF-Token", "")
                 if not _validate_csrf_token(csrf_token, session_raw):
