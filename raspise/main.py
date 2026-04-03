@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 
 import uvicorn
 
@@ -125,6 +126,35 @@ def _start_profiler(loop: asyncio.AbstractEventLoop) -> None:
 # Startup / shutdown lifespan
 # ---------------------------------------------------------------------------
 
+_LOG_RETENTION_DAYS = 90
+_LOG_CLEANUP_INTERVAL = 3600  # check once per hour
+
+
+async def _log_retention_loop() -> None:
+    """Prune auth_logs and tacacs_logs older than _LOG_RETENTION_DAYS."""
+    from sqlalchemy import delete as sa_delete
+    from raspise.db.database import AsyncSessionLocal
+    from raspise.db.models import AuthLog, TacacsLog
+
+    while True:
+        try:
+            cutoff = datetime.utcnow() - timedelta(days=_LOG_RETENTION_DAYS)
+            async with AsyncSessionLocal() as db:
+                r1 = await db.execute(
+                    sa_delete(AuthLog).where(AuthLog.timestamp < cutoff)
+                )
+                r2 = await db.execute(
+                    sa_delete(TacacsLog).where(TacacsLog.timestamp < cutoff)
+                )
+                await db.commit()
+                total = r1.rowcount + r2.rowcount
+                if total:
+                    log.info("Log retention: pruned %d old log entries (>%dd)", total, _LOG_RETENTION_DAYS)
+        except Exception as exc:
+            log.warning("Log retention cleanup failed: %s", exc)
+        await asyncio.sleep(_LOG_CLEANUP_INTERVAL)
+
+
 @asynccontextmanager
 async def _lifespan(_app):
     global _services_started
@@ -180,6 +210,9 @@ async def _lifespan(_app):
         # Guest session expiry cleanup
         from raspise.portal.app import expire_guest_sessions_loop
         asyncio.ensure_future(expire_guest_sessions_loop())
+
+        # Log retention cleanup (prune old auth_logs and tacacs_logs)
+        asyncio.ensure_future(_log_retention_loop())
 
         # Publish system-start event
         await bus.publish(Event(EventType.SYSTEM_START, data={"node": cfg.server.name}))

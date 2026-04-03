@@ -37,8 +37,9 @@
           <td class="font-monospace fw-semibold">{{ c.name }}</td>
           <td class="font-monospace">{{ c.ip_address }}</td>
           <td>
-            <span class="font-monospace text-muted secret-text" data-val="{{ c.secret }}">••••••••</span>
-            <button class="btn btn-sm btn-link p-0 ms-1 text-secondary reveal-btn" title="Show/hide">
+            <span class="font-monospace text-muted secret-text" id="secret-{{ c.id }}">••••••••</span>
+            <button class="btn btn-sm btn-link p-0 ms-1 text-secondary reveal-btn" title="Show/hide"
+                    onclick="toggleSecret({{ c.id }})">
               <i class="bi bi-eye"></i>
             </button>
           </td>
@@ -113,17 +114,20 @@
 
 {% block scripts %}
 <script>
-document.querySelectorAll('.reveal-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const span = btn.previousElementSibling;
-    if (span.textContent === '••••••••') {
-      span.textContent = span.dataset.val;
-      btn.querySelector('i').className = 'bi bi-eye-slash';
-    } else {
-      span.textContent = '••••••••';
-      btn.querySelector('i').className = 'bi bi-eye';
-    }
-  });
-});
+async function toggleSecret(id) {
+  const span = document.getElementById('secret-' + id);
+  if (span.dataset.revealed === '1') {
+    span.textContent = '••••••••';
+    span.dataset.revealed = '';
+    span.nextElementSibling.querySelector('i').className = 'bi bi-eye';
+  } else {
+    const r = await fetch('/radius-clients/' + id + '/secret');
+    if (!r.ok) { alert('Error fetching secret'); return; }
+    const data = await r.json();
+    span.textContent = data.secret;
+    span.dataset.revealed = '1';
+    span.nextElementSibling.querySelector('i').className = 'bi bi-eye-slash';
+  }
+}
 </script>
 {% endblock %}

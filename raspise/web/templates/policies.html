@@ -260,7 +260,7 @@ async function savePolicy() {
   };
   const r = await fetch('/api/v1/policies', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': window.CSRF_TOKEN},
     body: JSON.stringify(body),
   });
   if (r.ok) {
@@ -273,7 +273,7 @@ async function savePolicy() {
 
 async function deletePolicy(id, name) {
   if (!confirm('Delete policy "' + name + '"?')) return;
-  const r = await fetch('/api/v1/policies/' + id, { method: 'DELETE' });
+  const r = await fetch('/api/v1/policies/' + id, { method: 'DELETE', headers: {'X-CSRF-Token': window.CSRF_TOKEN} });
   if (r.ok) location.reload();
 }
 

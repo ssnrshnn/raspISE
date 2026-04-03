@@ -161,10 +161,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 class CSRFMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.method in ("POST", "PUT", "DELETE", "PATCH"):
-            # Skip CSRF for API proxy (uses Bearer tokens) and login
             path = request.url.path
-            if path.startswith("/api/v1/"):
-                return await call_next(request)
             # Login POST doesn't have a session yet — skip CSRF
             if path == "/login":
                 return await call_next(request)
@@ -335,8 +332,16 @@ async def do_login(
     )
 
 
+@app.post("/logout")
+async def logout(request: Request):
+    resp = RedirectResponse(url="/login", status_code=302)
+    resp.delete_cookie(_SESSION_COOKIE)
+    return resp
+
+
+# Also accept GET for backwards compatibility but redirect through POST
 @app.get("/logout")
-async def logout():
+async def logout_get(request: Request):
     resp = RedirectResponse(url="/login", status_code=302)
     resp.delete_cookie(_SESSION_COOKIE)
     return resp
@@ -588,7 +593,7 @@ async def settings_save(request: Request):
         data["display"]["enabled"]        = form.get("enabled") == "on"
         data["display"]["driver"]         = form.get("driver", "simulation")
         data["display"]["rotation"]       = _form_int(form, "rotation", 270)
-        data["display"]["cycle_interval"] = _form_int(form, "cycle_interval", 8)
+        data["display"]["screen_cycle_seconds"] = _form_int(form, "cycle_interval", 8)
         screens_raw = form.get("screens", "")
         data["display"]["screens"] = [s.strip() for s in screens_raw.split(",") if s.strip()]
 
@@ -811,6 +816,17 @@ async def toggle_radius_client(
     return RedirectResponse(url="/radius-clients", status_code=303)
 
 
+@app.get("/radius-clients/{client_id}/secret")
+async def reveal_radius_secret(
+    client_id: int, request: Request, db: AsyncSession = Depends(get_db)
+):
+    _require_auth(request)
+    c = (await db.execute(select(NasClient).where(NasClient.id == client_id))).scalar_one_or_none()
+    if not c:
+        return Response(content='{"detail":"Not found"}', status_code=404, media_type="application/json")
+    return Response(content=_json.dumps({"secret": c.secret}), media_type="application/json")
+
+
 # ---------------------------------------------------------------------------
 # TACACS+ Clients
 # ---------------------------------------------------------------------------
@@ -868,6 +884,17 @@ async def toggle_tacacs_client(
         c.enabled = not c.enabled
         await db.commit()
     return RedirectResponse(url="/tacacs-clients", status_code=303)
+
+
+@app.get("/tacacs-clients/{client_id}/key")
+async def reveal_tacacs_key(
+    client_id: int, request: Request, db: AsyncSession = Depends(get_db)
+):
+    _require_auth(request)
+    c = (await db.execute(select(TacacsClient).where(TacacsClient.id == client_id))).scalar_one_or_none()
+    if not c:
+        return Response(content='{"detail":"Not found"}', status_code=404, media_type="application/json")
+    return Response(content=_json.dumps({"key": c.key}), media_type="application/json")
 
 
 # ---------------------------------------------------------------------------

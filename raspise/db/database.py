@@ -1,6 +1,8 @@
 """SQLAlchemy async database engine and session factory."""
 from __future__ import annotations
 
+import threading
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -14,28 +16,33 @@ class Base(DeclarativeBase):
 # Lazy engine singleton — created on first access, not at import time
 _engine = None
 _session_factory = None
+_init_lock = threading.Lock()
 
 
 def _get_engine():
     global _engine
     if _engine is None:
-        cfg = get_config()
-        _engine = create_async_engine(
-            cfg.database.url,
-            echo=cfg.server.debug,
-            pool_pre_ping=True,
-        )
+        with _init_lock:
+            if _engine is None:
+                cfg = get_config()
+                _engine = create_async_engine(
+                    cfg.database.url,
+                    echo=cfg.server.debug,
+                    pool_pre_ping=True,
+                )
     return _engine
 
 
 def _get_session_factory():
     global _session_factory
     if _session_factory is None:
-        _session_factory = async_sessionmaker(
-            bind=_get_engine(),
-            class_=AsyncSession,
-            expire_on_commit=False,
-        )
+        with _init_lock:
+            if _session_factory is None:
+                _session_factory = async_sessionmaker(
+                    bind=_get_engine(),
+                    class_=AsyncSession,
+                    expire_on_commit=False,
+                )
     return _session_factory
 
 

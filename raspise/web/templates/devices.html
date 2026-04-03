@@ -72,7 +72,7 @@ document.getElementById('searchInput').addEventListener('input', function() {
 async function toggleDevice(id, newState) {
   const r = await fetch('/api/v1/devices/' + id, {
     method: 'PUT',
-    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (sessionStorage.getItem('raspise_token') || '')},
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': window.CSRF_TOKEN},
     body: JSON.stringify({authorized: newState}),
   });
   if (r.ok) location.reload();

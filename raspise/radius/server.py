@@ -130,39 +130,55 @@ class RaspISERadiusServer(pyrad.server.Server):
             log.warning("Dropping RADIUS request from unknown NAS %s", nas_ip)
             return
 
-        # Determine auth method from packet attributes
-        method, username, result, reason = self._authenticate(pkt)
+        try:
+            # Determine auth method from packet attributes
+            method, username, result, reason = self._authenticate(pkt)
 
-        # If credentials passed, run the policy engine for the final decision
-        policy_vlan: int | None = None
-        policy_name: str = ""
-        if result == AuthResult.SUCCESS:
-            policy_vlan, result, reason, policy_name = self._run_sync(
-                self._apply_policy(username, pkt, method)
-            )
+            # If credentials passed, run the policy engine for the final decision
+            policy_vlan: int | None = None
+            policy_name: str = ""
+            if result == AuthResult.SUCCESS:
+                policy_vlan, result, reason, policy_name = self._run_sync(
+                    self._apply_policy(username, pkt, method)
+                )
 
-        # Build reply
-        if result == AuthResult.SUCCESS:
-            reply = pkt.CreateReply(code=pyrad.packet.AccessAccept)
-            vlan = policy_vlan if policy_vlan is not None else self._resolve_vlan(username, nas_ip, method, pkt)
-            if vlan:
-                # RFC 3580 VLAN assignment attributes
-                try:
-                    reply["Tunnel-Type"]      = [("Virtual", 13)]   # VLAN
-                    reply["Tunnel-Medium-Type"] = [("IEEE-802", 6)]
-                    reply["Tunnel-Private-Group-Id"] = [("Tagged", str(vlan))]
-                except Exception:
-                    pass  # dictionary may not define these — non-fatal
-            log.info("Access-ACCEPT user=%r nas=%s method=%s", username, nas_ip, method)
-        elif result == AuthResult.CHALLENGE:
-            reply = pkt.CreateReply(code=pyrad.packet.AccessChallenge)
-        else:
-            reply = pkt.CreateReply(code=pyrad.packet.AccessReject)
-            log.info("Access-REJECT user=%r nas=%s reason=%r", username, nas_ip, reason)
+            # Build reply
+            if result == AuthResult.SUCCESS:
+                reply = pkt.CreateReply(code=pyrad.packet.AccessAccept)
+                vlan = policy_vlan if policy_vlan is not None else self._resolve_vlan(username, nas_ip, method, pkt)
+                if vlan:
+                    # RFC 3580 VLAN assignment attributes
+                    try:
+                        reply["Tunnel-Type"]      = [("Virtual", 13)]   # VLAN
+                        reply["Tunnel-Medium-Type"] = [("IEEE-802", 6)]
+                        reply["Tunnel-Private-Group-Id"] = [("Tagged", str(vlan))]
+                    except Exception:
+                        pass  # dictionary may not define these — non-fatal
+                log.info("Access-ACCEPT user=%r nas=%s method=%s", username, nas_ip, method)
+            elif result == AuthResult.CHALLENGE:
+                reply = pkt.CreateReply(code=pyrad.packet.AccessChallenge)
+            else:
+                reply = pkt.CreateReply(code=pyrad.packet.AccessReject)
+                log.info("Access-REJECT user=%r nas=%s reason=%r", username, nas_ip, reason)
 
-        self.SendReplyPacket(pkt.fd, reply)
-        self._log_auth(pkt, username, method, result, reason, policy_name, policy_vlan)
-        self._publish(username, pkt, method, result, reason)
+            self.SendReplyPacket(pkt.fd, reply)
+            self._log_auth(pkt, username, method, result, reason, policy_name, policy_vlan)
+            self._publish(username, pkt, method, result, reason)
+
+        except (TimeoutError, asyncio.CancelledError):
+            log.error("RADIUS auth handler timeout for NAS %s — sending Access-Reject", nas_ip)
+            try:
+                reply = pkt.CreateReply(code=pyrad.packet.AccessReject)
+                self.SendReplyPacket(pkt.fd, reply)
+            except Exception:
+                pass
+        except Exception as exc:
+            log.exception("RADIUS auth handler error for NAS %s: %s", nas_ip, exc)
+            try:
+                reply = pkt.CreateReply(code=pyrad.packet.AccessReject)
+                self.SendReplyPacket(pkt.fd, reply)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Accounting handler
@@ -306,6 +322,7 @@ class RaspISERadiusServer(pyrad.server.Server):
         self, status, session_id, username, ip, nas_ip, nas_port, pkt
     ) -> None:
         from sqlalchemy import select, delete
+        from sqlalchemy.exc import IntegrityError
         async with AsyncSessionLocal() as db:
             if status in (1, "Start"):
                 mac_raw = pkt.get("Calling-Station-Id", [""])[0]
@@ -330,7 +347,11 @@ class RaspISERadiusServer(pyrad.server.Server):
                 if sess:
                     sess.bytes_in  = int((pkt.get("Acct-Input-Octets",  [0])[0]) or 0)
                     sess.bytes_out = int((pkt.get("Acct-Output-Octets", [0])[0]) or 0)
-            await db.commit()
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                log.debug("Duplicate Accounting-Start for session %s — ignored", session_id)
 
     # ---- VLAN resolution ----
 
@@ -401,8 +422,12 @@ class RaspISERadiusServer(pyrad.server.Server):
 
     def _run_sync(self, coro) -> Any:
         """Run *coro* from the RADIUS thread using the stored asyncio loop."""
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=10)
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            return future.result(timeout=10)
+        except (TimeoutError, asyncio.CancelledError) as exc:
+            log.error("RADIUS async bridge timeout/cancelled: %s", exc)
+            raise
 
     # ---- Auth logging ----
 

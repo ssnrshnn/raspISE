@@ -98,7 +98,7 @@ async function createGuest() {
   };
   const r = await fetch('/api/v1/guests', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': window.CSRF_TOKEN},
     body: JSON.stringify(body),
   });
   if (r.ok) {

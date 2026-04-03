@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from raspise.config import get_config
 from raspise.core.logger import get_logger
 from raspise.core.utils import generate_token, normalise_mac, utcnow
+from raspise.core.ratelimit import check_rate_limit, record_failure
 from raspise.db import get_db
 from raspise.db.models import GuestSession
 
@@ -115,6 +116,15 @@ async def register(
     db:        AsyncSession = Depends(get_db),
 ):
     cfg = get_config().portal
+    ip = request.client.host if request.client else "unknown"
+
+    # Rate limit: prevent flooding
+    if not check_rate_limit(f"portal:{ip}"):
+        return templates.TemplateResponse(request, "portal.html", {
+            "request": request, "mac": mac, "ssid": cfg.guest_ssid,
+            "error": "Too many registration attempts. Please try again later.",
+            "redirect": "",
+        })
 
     # Basic input validation
     if not full_name.strip() or len(full_name) > 128:
@@ -173,11 +183,15 @@ async def success(request: Request, token: str = "", db: AsyncSession = Depends(
     from sqlalchemy import select
     cfg = get_config().portal
 
-    # Verify the token maps to a real session (prevents random /success visits)
+    # Verify the token maps to a real, active session
     sess = None
     if token:
         stmt = select(GuestSession).where(GuestSession.token == token)
         sess = (await db.execute(stmt)).scalar_one_or_none()
+
+    if not sess:
+        # No valid token — redirect to the registration page
+        return RedirectResponse(url="/", status_code=302)
 
     # Generate QR code image from server-side config — PSK never leaves the server
     qr_base64 = ""

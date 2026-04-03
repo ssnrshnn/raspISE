@@ -54,7 +54,7 @@ async function removeSession(id) {
   if (!confirm('Remove session record?')) return;
   const r = await fetch('/api/v1/sessions/' + id, {
     method: 'DELETE',
-    headers: {'Authorization': 'Bearer ' + (sessionStorage.getItem('raspise_token') || '')},
+    headers: {'X-CSRF-Token': window.CSRF_TOKEN},
   });
   if (r.ok) location.reload();
 }

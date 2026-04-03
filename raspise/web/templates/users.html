@@ -40,10 +40,7 @@
           <td class="text-muted">{{ u.last_login.strftime('%Y-%m-%d %H:%M') if u.last_login else '—' }}</td>
           <td>
             <button class="btn btn-sm btn-outline-danger"
-                    hx-delete="/api/v1/users/{{ u.id }}"
-                    hx-confirm="Delete user {{ u.username }}?"
-                    hx-target="closest tr"
-                    hx-swap="outerHTML swap:0.2s">
+                    onclick="deleteUser({{ u.id }}, '{{ u.username }}')">
               <i class="bi bi-trash"></i>
             </button>
           </td>
@@ -109,16 +106,21 @@ document.getElementById('addUserForm').addEventListener('submit', async (e) => {
   if (!body.group_id) delete body.group_id;
   const r = await fetch('/api/v1/users', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken()},
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': window.CSRF_TOKEN},
     body: JSON.stringify(body),
   });
   if (r.ok) { location.reload(); }
   else { alert('Error: ' + (await r.json()).detail); }
 });
 
-function getToken() {
-  // Token stored in sessionStorage after login via REST API
-  return sessionStorage.getItem('raspise_token') || '';
+async function deleteUser(id, name) {
+  if (!confirm('Delete user ' + name + '?')) return;
+  const r = await fetch('/api/v1/users/' + id, {
+    method: 'DELETE',
+    headers: {'X-CSRF-Token': window.CSRF_TOKEN},
+  });
+  if (r.ok) location.reload();
+  else alert('Error deleting user');
 }
 </script>
 {% endblock %}

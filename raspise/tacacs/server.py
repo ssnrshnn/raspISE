@@ -51,7 +51,7 @@ TAC_PLUS_AUTHEN  = 0x01
 TAC_PLUS_AUTHOR  = 0x02
 TAC_PLUS_ACCT    = 0x03
 
-TAC_PLUS_UNENCRYPTED_FLAG = 0x04
+TAC_PLUS_UNENCRYPTED_FLAG = 0x01   # RFC 8907 §3.3
 TAC_PLUS_SINGLE_CONNECT   = 0x04
 
 # Authentication status
@@ -90,6 +90,7 @@ TAC_PLUS_ACCT_FLAG_STOP      = 0x04
 TAC_PLUS_ACCT_FLAG_WATCHDOG  = 0x08
 
 HEADER_LEN = 12
+MAX_BODY_LEN = 65536   # 64 KiB — reject oversized packets
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +185,7 @@ class TacacsSession:
         if self._allowed and self._peer_ip not in self._allowed:
             log.warning("TACACS+ connection from unauthorised host %s — closing", self._peer_ip)
             self._writer.close()
+            await self._writer.wait_closed()
             return
 
         try:
@@ -195,17 +197,30 @@ class TacacsSession:
             log.exception("TACACS+ session error: %s", exc)
         finally:
             self._writer.close()
+            await self._writer.wait_closed()
 
     async def _handle_one_packet(self) -> None:
         raw_hdr = await self._reader.readexactly(HEADER_LEN)
         hdr     = TacacsHeader.decode(raw_hdr)
+
+        if hdr.length > MAX_BODY_LEN:
+            log.warning(
+                "TACACS+ packet from %s has body length %d > %d — dropping connection",
+                self._peer_ip, hdr.length, MAX_BODY_LEN,
+            )
+            raise ConnectionResetError("oversized packet")
+
         raw_body = await self._reader.readexactly(hdr.length)
 
-        # Decrypt unless UNENCRYPTED flag is set (should not happen in prod)
-        if not (hdr.flags & TAC_PLUS_UNENCRYPTED_FLAG):
-            body = _crypt(raw_body, self._key, hdr.session_id, hdr.version, hdr.seq_no)
-        else:
-            body = raw_body
+        # Reject unencrypted packets — RFC 8907 §3.3 SHOULD NOT accept them
+        if hdr.flags & TAC_PLUS_UNENCRYPTED_FLAG:
+            log.warning(
+                "TACACS+ unencrypted packet from %s — rejecting (flag=0x%02x)",
+                self._peer_ip, hdr.flags,
+            )
+            raise ConnectionResetError("unencrypted packet rejected")
+
+        body = _crypt(raw_body, self._key, hdr.session_id, hdr.version, hdr.seq_no)
 
         if hdr.pkt_type == TAC_PLUS_AUTHEN:
             await self._handle_authen(hdr, body)
@@ -287,7 +302,12 @@ class TacacsSession:
             log.warning("TACACS+ CONTINUE: body too short from %s", self._peer_ip)
             await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_FAIL, "Malformed CONTINUE")
             return
-        # flags = body[4]  (abort flag etc. — not checked here)
+        flags = body[4]
+        # TAC_PLUS_CONTINUE_FLAG_ABORT = 0x01 — client wants to abort
+        if flags & 0x01:
+            log.debug("TACACS+ CONTINUE abort from %s", self._peer_ip)
+            self._ascii_state = {}
+            return
         offset   = 5
         user_msg = body[offset:offset + user_msg_len].decode("utf-8", errors="replace")
 
@@ -384,13 +404,16 @@ class TacacsSession:
     async def _send_author_reply(
         self, req_hdr: TacacsHeader, status: int, av_pairs: list[str]
     ) -> None:
-        av_data = _encode_av_pairs(av_pairs)
+        # RFC 8907 §5.2: header | arg_1_len..arg_N_len | server_msg | data | arg_1..arg_N
+        encoded_args = [p.encode() for p in av_pairs]
+        arg_lengths = bytes(len(a) for a in encoded_args)
+        arg_bodies  = b"".join(encoded_args)
         body = struct.pack(
             "!BBHH",
             status, len(av_pairs),
             0,        # server_msg_len
             0,        # data_len
-        ) + av_data
+        ) + arg_lengths + arg_bodies
         await self._send_reply(req_hdr, TAC_PLUS_AUTHOR, body)
 
     # ------------------------------------------------------------------
