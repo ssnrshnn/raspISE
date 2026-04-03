@@ -180,12 +180,10 @@ class DisplayDriver:
         # ── Command helper ────────────────────────────────────────────
         def _c(cmd, *data):
             GPIO.output(cfg.dc_pin, GPIO.LOW)
-            spi.xfer2([cmd])
+            spi.writebytes([cmd])
             if data:
                 GPIO.output(cfg.dc_pin, GPIO.HIGH)
-                payload = list(data)
-                for i in range(0, len(payload), 4096):
-                    spi.xfer2(payload[i:i + 4096])
+                spi.writebytes2(bytes(data))
 
         # ── Full ILI9341 init sequence (Adafruit-equivalent) ──────────
         _c(0xEF, 0x03, 0x80, 0x02)
@@ -235,16 +233,16 @@ class DisplayDriver:
         hi, lo = (color >> 8) & 0xFF, color & 0xFF
 
         def _c(cmd, *data):
-            GPIO.output(dc, GPIO.LOW);  spi.xfer2([cmd])
-            if data: GPIO.output(dc, GPIO.HIGH); spi.xfer2(list(data))
+            GPIO.output(dc, GPIO.LOW);  spi.writebytes([cmd])
+            if data: GPIO.output(dc, GPIO.HIGH); spi.writebytes2(bytes(data))
 
-        _c(0x2A, 0x00, 0x00, 0x00, cw - 1)
+        _c(0x2A, 0x00, 0x00, (cw - 1) >> 8, (cw - 1) & 0xFF)
         _c(0x2B, 0x00, 0x00, (rh - 1) >> 8, (rh - 1) & 0xFF)
-        GPIO.output(dc, GPIO.LOW);  spi.xfer2([0x2C])
+        GPIO.output(dc, GPIO.LOW);  spi.writebytes([0x2C])
         GPIO.output(dc, GPIO.HIGH)
-        row = [hi, lo] * cw
+        row = bytes([hi, lo] * cw)
         for _ in range(rh):
-            spi.xfer2(row)
+            spi.writebytes2(row)
 
     def _init_st7789(self, cfg) -> None:
         import st7789
@@ -293,14 +291,13 @@ class DisplayDriver:
                 GPIO = self._gpio
                 dc   = self._dc_pin
                 spi  = self._spi
-                GPIO.output(dc, GPIO.LOW);  spi.xfer2([0x2A])
-                GPIO.output(dc, GPIO.HIGH); spi.xfer2([0x00, 0x00, (pw-1)>>8, (pw-1)&0xFF])
-                GPIO.output(dc, GPIO.LOW);  spi.xfer2([0x2B])
-                GPIO.output(dc, GPIO.HIGH); spi.xfer2([0x00, 0x00, (ph-1)>>8, (ph-1)&0xFF])
-                GPIO.output(dc, GPIO.LOW);  spi.xfer2([0x2C])
+                GPIO.output(dc, GPIO.LOW);  spi.writebytes([0x2A])
+                GPIO.output(dc, GPIO.HIGH); spi.writebytes2(bytes([0x00, 0x00, (pw-1)>>8, (pw-1)&0xFF]))
+                GPIO.output(dc, GPIO.LOW);  spi.writebytes([0x2B])
+                GPIO.output(dc, GPIO.HIGH); spi.writebytes2(bytes([0x00, 0x00, (ph-1)>>8, (ph-1)&0xFF]))
+                GPIO.output(dc, GPIO.LOW);  spi.writebytes([0x2C])
                 GPIO.output(dc, GPIO.HIGH)
-                for i in range(0, len(rgb565), 4096):
-                    spi.xfer2(list(rgb565[i:i + 4096]))
+                spi.writebytes2(rgb565)
                 if frame_no % 10 == 0:
                     log.debug("ILI9341 frame %d pushed (%d bytes, rot=%d)", frame_no, len(rgb565), rot)
             elif self._driver == "st7789":
@@ -324,6 +321,7 @@ class DisplayManager:
         self._screens: list[BaseScreen] = []
         self._current = 0
         self._running = False
+        self._thread: threading.Thread | None = None
 
     def register_screens(self, screens: list[BaseScreen]) -> None:
         self._screens = screens
@@ -333,12 +331,15 @@ class DisplayManager:
             log.info("Display disabled in config")
             return
         self._running = True
-        t = threading.Thread(target=self._loop, daemon=True, name="display-manager")
-        t.start()
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="display-manager")
+        self._thread.start()
         log.info("Display manager started (%d screens)", len(self._screens))
 
     def stop(self) -> None:
         self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None
 
     def _loop(self) -> None:
         cycle_s = get_config().display.screen_cycle_seconds

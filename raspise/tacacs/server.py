@@ -34,7 +34,8 @@ from raspise.config import get_config
 from raspise.core.events import bus, Event, EventType
 from raspise.core.logger import get_logger
 from raspise.db.database import AsyncSessionLocal
-from raspise.db.models import TacacsLog, TacacsPacketType, User
+from raspise.db.models import TacacsLog, TacacsPacketType, PolicyAction, User
+from raspise.policy.engine import AuthContext, engine as policy_engine
 
 log = get_logger(__name__)
 
@@ -139,10 +140,10 @@ def _parse_av_pairs(data: bytes) -> list[str]:
     pairs: list[str] = []
     offset = 0
     while offset < len(data):
-        if offset >= len(data):
-            break
         ln = data[offset]
         offset += 1
+        if offset + ln > len(data):
+            break  # truncated pair — stop parsing
         pairs.append(data[offset:offset + ln].decode("utf-8", errors="replace"))
         offset += ln
     return pairs
@@ -176,6 +177,8 @@ class TacacsSession:
         self._key      = key
         self._allowed  = allowed_clients
         self._peer_ip  = writer.get_extra_info("peername", ("?", 0))[0]
+        # Per-connection ASCII auth state for multi-round exchanges
+        self._ascii_state: dict = {}
 
     async def handle(self) -> None:
         if self._allowed and self._peer_ip not in self._allowed:
@@ -232,6 +235,12 @@ class TacacsSession:
         action, priv_lvl, authen_type, authen_svc = struct.unpack("!BBBB", body[0:4])
         user_len, port_len, rem_addr_len, data_len = struct.unpack("!BBBB", body[4:8])
 
+        expected = 8 + user_len + port_len + rem_addr_len + data_len
+        if expected > len(body):
+            log.warning("TACACS+ AUTHEN START: body too short (need %d, got %d) from %s", expected, len(body), self._peer_ip)
+            await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_ERROR, "Malformed packet")
+            return
+
         offset = 8
         username  = body[offset:offset + user_len].decode("utf-8", errors="replace"); offset += user_len
         port      = body[offset:offset + port_len].decode("utf-8", errors="replace"); offset += port_len
@@ -250,16 +259,16 @@ class TacacsSession:
                 await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_FAIL, "Authentication failed")
 
         elif authen_type == TAC_PLUS_AUTHEN_TYPE_ASCII:
+            # Reset any prior ASCII state for this connection
             if not username:
                 # Ask for username first
+                self._ascii_state = {"step": "getuser", "rem": rem_addr}
                 await self._send_authen_reply(
                     hdr, TAC_PLUS_AUTHEN_STATUS_GETUSER, "Username: ", no_echo=False
                 )
-                # Store state for CONTINUE
-                hdr._ascii_state = {"step": "getuser", "rem": rem_addr}
             else:
-                # Have username, ask for password
-                hdr._ascii_state = {"step": "getpass", "username": username, "rem": rem_addr}
+                # Username already present in START — ask for password
+                self._ascii_state = {"step": "getpass", "username": username, "rem": rem_addr}
                 await self._send_authen_reply(
                     hdr, TAC_PLUS_AUTHEN_STATUS_GETPASS, "Password: ", no_echo=True
                 )
@@ -267,8 +276,51 @@ class TacacsSession:
             await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_ERROR, "Unsupported auth type")
 
     async def _handle_authen_continue(self, hdr: TacacsHeader, body: bytes) -> None:
-        # Simplified: in single-round PAP we won't reach here often
-        await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_FAIL, "Multi-round not supported in this session")
+        """Handle ASCII multi-round CONTINUE packets (RFC 8907 §4.3)."""
+        # CONTINUE body: user_msg_len (2B), data_len (2B), flags (1B), user_msg, data
+        if len(body) < 5:
+            await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_FAIL, "Bad CONTINUE packet")
+            return
+
+        user_msg_len, data_len = struct.unpack("!HH", body[0:4])
+        if 5 + user_msg_len + data_len > len(body):
+            log.warning("TACACS+ CONTINUE: body too short from %s", self._peer_ip)
+            await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_FAIL, "Malformed CONTINUE")
+            return
+        # flags = body[4]  (abort flag etc. — not checked here)
+        offset   = 5
+        user_msg = body[offset:offset + user_msg_len].decode("utf-8", errors="replace")
+
+        state = self._ascii_state
+        if not state:
+            await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_FAIL, "Unexpected CONTINUE")
+            return
+
+        if state.get("step") == "getuser":
+            username = user_msg.strip()
+            if not username:
+                await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_FAIL, "Empty username")
+                self._ascii_state = {}
+                return
+            self._ascii_state = {"step": "getpass", "username": username, "rem": state.get("rem", "")}
+            await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_GETPASS, "Password: ", no_echo=True)
+
+        elif state.get("step") == "getpass":
+            username = state["username"]
+            password = user_msg
+            rem      = state.get("rem", "")
+            self._ascii_state = {}   # clear state regardless of outcome
+
+            if await _verify_user(username, password):
+                await self._log_tacacs(TacacsPacketType.AUTHEN, username, rem, "LOGIN", "PASS")
+                await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_PASS, "Authentication successful")
+            else:
+                await self._log_tacacs(TacacsPacketType.AUTHEN, username, rem, "LOGIN", "FAIL")
+                await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_FAIL, "Authentication failed")
+
+        else:
+            self._ascii_state = {}
+            await self._send_authen_reply(hdr, TAC_PLUS_AUTHEN_STATUS_FAIL, "Unknown auth state")
 
     async def _send_authen_reply(
         self,
@@ -296,7 +348,16 @@ class TacacsSession:
         user_len, port_len, rem_addr_len, arg_cnt       = struct.unpack("!BBBB", body[4:8])
 
         offset = 8
+        if offset + arg_cnt > len(body):
+            log.warning("TACACS+ AUTHOR: body too short for arg lengths from %s", self._peer_ip)
+            await self._send_author_reply(hdr, TAC_PLUS_AUTHOR_STATUS_ERROR, [])
+            return
         arg_lengths = list(body[offset:offset + arg_cnt]); offset += arg_cnt
+        expected = offset + user_len + port_len + rem_addr_len + sum(arg_lengths)
+        if expected > len(body):
+            log.warning("TACACS+ AUTHOR: body too short (need %d, got %d) from %s", expected, len(body), self._peer_ip)
+            await self._send_author_reply(hdr, TAC_PLUS_AUTHOR_STATUS_ERROR, [])
+            return
         username = body[offset:offset + user_len].decode("utf-8", errors="replace"); offset += user_len
         port     = body[offset:offset + port_len].decode("utf-8", errors="replace"); offset += port_len
         rem_addr = body[offset:offset + rem_addr_len].decode("utf-8", errors="replace"); offset += rem_addr_len
@@ -310,7 +371,7 @@ class TacacsSession:
 
         # Simple authorization: allow all commands for known users that have priv 15
         command = next((a.split("=", 1)[1] for a in args if a.startswith("cmd=")), "")
-        allowed = await _is_user_authorized(username, priv_lvl, command)
+        allowed = await _is_user_authorized(username, priv_lvl, command, nas_ip=self._peer_ip)
 
         result_str = "PASS" if allowed else "FAIL"
         await self._log_tacacs(TacacsPacketType.AUTHOR, username, rem_addr, command, result_str, priv_lvl)
@@ -345,7 +406,16 @@ class TacacsSession:
         user_len, port_len, rem_addr_len, arg_cnt                = struct.unpack("!BBBB", body[5:9])
 
         offset = 9
+        if offset + arg_cnt > len(body):
+            log.warning("TACACS+ ACCT: body too short for arg lengths from %s", self._peer_ip)
+            await self._send_acct_reply(hdr, TAC_PLUS_ACCT_STATUS_ERROR)
+            return
         arg_lengths = list(body[offset:offset + arg_cnt]); offset += arg_cnt
+        expected = offset + user_len + port_len + rem_addr_len + sum(arg_lengths)
+        if expected > len(body):
+            log.warning("TACACS+ ACCT: body too short (need %d, got %d) from %s", expected, len(body), self._peer_ip)
+            await self._send_acct_reply(hdr, TAC_PLUS_ACCT_STATUS_ERROR)
+            return
         username = body[offset:offset + user_len].decode("utf-8", errors="replace"); offset += user_len
         port     = body[offset:offset + port_len].decode("utf-8", errors="replace"); offset += port_len
         rem_addr = body[offset:offset + rem_addr_len].decode("utf-8", errors="replace"); offset += rem_addr_len
@@ -426,15 +496,17 @@ async def _verify_user(username: str, password: str) -> bool:
         return bcrypt.checkpw(password.encode(), user.password_hash.encode())
 
 
-async def _is_user_authorized(username: str, priv_lvl: int, command: str) -> bool:
+async def _is_user_authorized(username: str, priv_lvl: int, command: str, nas_ip: str = "") -> bool:
     """
-    Simple rule: any enabled user may run non-destructive show commands.
-    Users in the 'network-admins' group get full privilege 15 access.
-    Extend this with proper RBAC for production use.
+    Authorize a TACACS+ command request.
+
+    1. Confirm the user exists and is enabled.
+    2. Run the policy engine — the same policies that govern RADIUS also apply here.
+    3. Fall back to group-based heuristic only when no policies match (DENY is default).
     """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
     async with AsyncSessionLocal() as db:
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
         stmt = (
             select(User)
             .options(selectinload(User.group))
@@ -443,12 +515,23 @@ async def _is_user_authorized(username: str, priv_lvl: int, command: str) -> boo
         user = (await db.execute(stmt)).scalar_one_or_none()
         if user is None:
             return False
-        if user.group and user.group.name.lower() in ("network-admins", "superadmins"):
-            return True
-        # Allow read-only commands for everyone else
-        if command.strip().lower().startswith("show"):
-            return True
+
+        group_name = user.group.name if user.group else ""
+
+        ctx = AuthContext(
+            username=username,
+            nas_ip=nas_ip,
+            auth_method="TACACS",
+            group_name=group_name,
+        )
+        decision = await policy_engine.evaluate(ctx, db)
+
+    if decision.action == PolicyAction.PERMIT:
+        return True
+    if decision.action == PolicyAction.DENY:
         return False
+    # GUEST action — allow read-only show commands only
+    return command.strip().lower().startswith("show")
 
 
 # ---------------------------------------------------------------------------
@@ -457,10 +540,17 @@ async def _is_user_authorized(username: str, priv_lvl: int, command: str) -> boo
 
 async def run_tacacs_server() -> None:
     cfg = get_config().tacacs
-    key = cfg.key.encode()
-    allowed = {c.address for c in cfg.clients} if cfg.clients else set()
+    default_key = cfg.key.encode()
+    # Build per-client key map: IP → key bytes
+    client_keys: dict[str, bytes] = {}
+    for c in cfg.clients:
+        client_keys[c.address] = c.key.encode()
+    allowed = set(client_keys.keys()) if cfg.clients else set()
 
     async def _client_cb(reader, writer):
+        peer_ip = writer.get_extra_info("peername", ("?", 0))[0]
+        # Use per-client key if configured, otherwise fall back to global key
+        key = client_keys.get(peer_ip, default_key)
         sess = TacacsSession(reader, writer, key, allowed)
         await sess.handle()
 

@@ -3,9 +3,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from raspise.api.routes import router
+from raspise.config import get_config
 
 
 def create_api_app() -> FastAPI:
+    cfg = get_config()
     app = FastAPI(
         title="RaspISE REST API",
         version="1.0.0",
@@ -13,10 +15,11 @@ def create_api_app() -> FastAPI:
     )
     app.add_middleware(
         CORSMiddleware,
-        # Proxy on :8080 calls us from 127.0.0.1; allow that origin plus
-        # direct browser access from the local network.
-        allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"],
-        allow_origin_regex=r"http://192\.168\.\d+\.\d+:8080",
+        allow_origins=[
+            f"http://localhost:{cfg.web.port}",
+            f"http://127.0.0.1:{cfg.web.port}",
+        ],
+        allow_origin_regex=r"http://192\.168\.\d+\.\d+:" + str(cfg.web.port),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

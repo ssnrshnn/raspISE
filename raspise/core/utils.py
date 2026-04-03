@@ -72,6 +72,12 @@ def is_within_time_range(start: str, end: str, now: time | None = None) -> bool:
 # ---------------------------------------------------------------------------
 
 def chap_verify(identifier: bytes, password: str, chap_response: bytes) -> bool:
-    """Verify CHAP-Password (RFC 1994, MD5 based)."""
-    expected = hashlib.md5(identifier + password.encode() + b"\x00").digest()
+    """Verify CHAP-Password (RFC 1994, MD5 based).
+
+    *chap_response* must be ``chap_resp (16 bytes) + challenge`` so that
+    ``chap_response[:16]`` is the peer's response and ``chap_response[16:]``
+    is the challenge used in the hash: MD5(id || secret || challenge).
+    """
+    challenge = chap_response[16:]
+    expected  = hashlib.md5(identifier + password.encode() + challenge).digest()
     return hmac.compare_digest(expected, chap_response[:16])

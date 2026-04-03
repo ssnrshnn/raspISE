@@ -51,6 +51,7 @@ from fastapi import Depends, FastAPI, Form, Request, Response, status as http_st
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from jose import JWTError, jwt
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,15 +75,174 @@ templates.env.filters["from_json"] = _json.loads
 
 
 # ---------------------------------------------------------------------------
-# Session cookie helper (lightweight — no external session library needed)
+# Session cookie helpers — signed JWT stored as an HttpOnly cookie
 # ---------------------------------------------------------------------------
 
-_SESSION_COOKIE = "raspise_session"
+_SESSION_COOKIE   = "raspise_session"
+_SESSION_ALGORITHM = "HS256"
+_SESSION_MAX_AGE   = 3600 * 8   # 8 hours
+
+# ---------------------------------------------------------------------------
+# CSRF protection — signed token per session, validated on every state-changing POST
+# ---------------------------------------------------------------------------
+import secrets as _secrets
+import hmac as _hmac
+import hashlib as _hashlib
+
+_CSRF_COOKIE = "raspise_csrf"
+
+
+def _generate_csrf_token(session_token: str) -> str:
+    """Generate a CSRF token bound to the user's session."""
+    secret = get_config().server.secret_key
+    nonce = _secrets.token_hex(16)
+    sig = _hmac.new(
+        secret.encode(), (nonce + session_token).encode(), _hashlib.sha256
+    ).hexdigest()[:32]
+    return f"{nonce}:{sig}"
+
+
+def _validate_csrf_token(token: str, session_token: str) -> bool:
+    """Verify the CSRF token matches the session."""
+    if not token or ":" not in token:
+        return False
+    nonce, sig = token.split(":", 1)
+    secret = get_config().server.secret_key
+    expected = _hmac.new(
+        secret.encode(), (nonce + session_token).encode(), _hashlib.sha256
+    ).hexdigest()[:32]
+    return _hmac.compare_digest(sig, expected)
+
+
+def _get_csrf_token(request: Request) -> str:
+    """Get or create a CSRF token for the current session."""
+    session_raw = request.cookies.get(_SESSION_COOKIE, "")
+    return _generate_csrf_token(session_raw)
+
+
+# Inject csrf_token into all template contexts
+_orig_template_response = templates.TemplateResponse
+
+
+def _csrf_template_response(request_or_name, *args, **kwargs):
+    """Wrapper that injects csrf_token into every template context."""
+    # Handle both old-style (name, context) and new-style (request, name, context)
+    ctx = kwargs.get("context")
+    if ctx is None and args:
+        # Positional: TemplateResponse(request, name, context) or (name, context)
+        if len(args) >= 2 and isinstance(args[1], dict):
+            ctx = args[1]
+        elif len(args) >= 1 and isinstance(args[0], str) and len(args) >= 2:
+            ctx = args[1] if isinstance(args[1], dict) else {}
+    if ctx is None:
+        # Try to find request in args/kwargs to generate token
+        ctx = {}
+    # Find request object to generate token
+    req = None
+    if isinstance(request_or_name, Request):
+        req = request_or_name
+    elif ctx and "request" in ctx:
+        req = ctx["request"]
+    if req and "csrf_token" not in ctx:
+        ctx["csrf_token"] = _get_csrf_token(req)
+    return _orig_template_response(request_or_name, *args, **kwargs)
+
+
+templates.TemplateResponse = _csrf_template_response
+
+
+# ---------------------------------------------------------------------------
+# CSRF validation middleware for all POST/PUT/DELETE requests (except API proxy)
+# ---------------------------------------------------------------------------
+
+from starlette.middleware.base import BaseHTTPMiddleware
+
+
+class CSRFMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+            # Skip CSRF for API proxy (uses Bearer tokens) and login
+            path = request.url.path
+            if path.startswith("/api/v1/"):
+                return await call_next(request)
+            # Login POST doesn't have a session yet — skip CSRF
+            if path == "/login":
+                return await call_next(request)
+
+            session_raw = request.cookies.get(_SESSION_COOKIE, "")
+            if session_raw:
+                # Check form field or header
+                content_type = request.headers.get("content-type", "")
+                csrf_token = ""
+                if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+                    form = await request.form()
+                    csrf_token = form.get("csrf_token", "")
+                if not csrf_token:
+                    csrf_token = request.headers.get("X-CSRF-Token", "")
+                if not _validate_csrf_token(csrf_token, session_raw):
+                    return Response(
+                        content="CSRF token missing or invalid. Please reload the page and try again.",
+                        status_code=403,
+                        media_type="text/plain",
+                    )
+        return await call_next(request)
+
+
+app.add_middleware(CSRFMiddleware)
+
+
+# ---------------------------------------------------------------------------
+# Security response headers — prevent clickjacking, MIME-sniffing, etc.
+# ---------------------------------------------------------------------------
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
+# ---------------------------------------------------------------------------
+# Login rate limiter — shared with the REST API via core.ratelimit
+# ---------------------------------------------------------------------------
+from raspise.core.ratelimit import check_rate_limit, record_failure, clear_failures
+
+
+def _sign_session(username: str) -> str:
+    """Encode a signed, time-limited session token for *username*."""
+    import time
+    secret = get_config().server.secret_key
+    payload = {
+        "sub": username,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + _SESSION_MAX_AGE,
+    }
+    return jwt.encode(payload, secret, algorithm=_SESSION_ALGORITHM)
+
+
+def _verify_session(value: str) -> str | None:
+    """Decode and verify a session token; return the username or None."""
+    try:
+        secret = get_config().server.secret_key
+        payload = jwt.decode(value, secret, algorithms=[_SESSION_ALGORITHM])
+        return payload.get("sub")
+    except JWTError:
+        return None
 
 
 def _get_session_user(request: Request) -> str | None:
     """Return username from signed session cookie, or None."""
-    return request.cookies.get(_SESSION_COOKIE)
+    raw = request.cookies.get(_SESSION_COOKIE)
+    if not raw:
+        return None
+    return _verify_session(raw)
 
 
 def _require_auth(request: Request):
@@ -121,20 +281,34 @@ async def do_login(
     password: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
+    ip = request.client.host if request.client else "unknown"
+
+    if not check_rate_limit(ip):
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"request": request, "error": "Too many failed attempts. Try again in 5 minutes."},
+            status_code=429,
+        )
+
     stmt = select(AdminUser).where(AdminUser.username == username, AdminUser.enabled == True)
     user = (await db.execute(stmt)).scalar_one_or_none()
 
     if user and verify_password(password, user.password_hash):
+        clear_failures(ip)
         user.last_login = datetime.now(timezone.utc)
         await db.commit()
         resp = RedirectResponse(url="/", status_code=303)
+        is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
         resp.set_cookie(
-            _SESSION_COOKIE, username,
+            _SESSION_COOKIE, _sign_session(username),
             httponly=True, samesite="lax",
-            max_age=3600 * 8,
+            secure=is_https,
+            max_age=_SESSION_MAX_AGE,
         )
         return resp
 
+    record_failure(ip)
     return templates.TemplateResponse(
         request,
         "login.html",
@@ -262,7 +436,11 @@ async def logs_page(
     per_page = 50
     stmt = select(AuthLog).order_by(AuthLog.timestamp.desc())
     if result:
-        stmt = stmt.where(AuthLog.result == result.upper())
+        valid_results = {e.value for e in AuthResult}
+        if result.upper() in valid_results:
+            stmt = stmt.where(AuthLog.result == result.upper())
+        else:
+            result = ""  # ignore invalid filter value
     stmt = stmt.offset((page - 1) * per_page).limit(per_page)
     rows = (await db.execute(stmt)).scalars().all()
     total = (await db.execute(
@@ -301,10 +479,14 @@ async def guests_page(request: Request, db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(
         select(GuestSession).order_by(GuestSession.created_at.desc()).limit(100)
     )).scalars().all()
-    now = datetime.utcnow()  # naive UTC — matches SQLite's naive datetime storage
-    # Build portal URL using the same host but portal port
-    portal_host = request.headers.get("host", "").split(":")[0] or "localhost"
-    portal_url  = f"http://{portal_host}:{cfg.portal.port}"
+    now = datetime.now(timezone.utc)
+    # Build portal URL from config — never trust the Host header for URL construction
+    cfg_host = request.headers.get("host", "").split(":")[0] or "localhost"
+    # Validate host: only allow alphanumeric, dots, hyphens (valid hostname chars)
+    import re as _re
+    if not _re.match(r"^[a-zA-Z0-9._-]+$", cfg_host):
+        cfg_host = "localhost"
+    portal_url  = f"http://{cfg_host}:{cfg.portal.port}"
     return templates.TemplateResponse(request, "guests.html", {
         "request": request, "user": user, "sessions": rows, "now": now,
         "portal_url": portal_url,
@@ -322,6 +504,21 @@ async def settings_page(request: Request):
     return templates.TemplateResponse(request, "settings.html", {
         "request": request, "user": user, "cfg": cfg,
     })
+
+
+def _form_int(form, key: str, default: int) -> int:
+    """Parse an integer form field, returning *default* on any invalid input."""
+    try:
+        return int(form.get(key, default))
+    except (ValueError, TypeError):
+        return default
+
+
+def _form_float(form, key: str, default: float) -> float:
+    try:
+        return float(form.get(key, default))
+    except (ValueError, TypeError):
+        return default
 
 
 @app.post("/settings/save")
@@ -352,19 +549,19 @@ async def settings_save(request: Request):
     elif section == "radius":
         data.setdefault("radius", {})
         data["radius"]["enabled"]      = form.get("enabled") == "on"
-        data["radius"]["auth_port"]    = int(form.get("auth_port", 1812))
-        data["radius"]["acct_port"]    = int(form.get("acct_port", 1813))
-        data["radius"]["default_vlan"] = int(form.get("default_vlan", 1))
-        data["radius"]["guest_vlan"]   = int(form.get("guest_vlan", 99))
+        data["radius"]["auth_port"]    = _form_int(form, "auth_port", 1812)
+        data["radius"]["acct_port"]    = _form_int(form, "acct_port", 1813)
+        data["radius"]["default_vlan"] = _form_int(form, "default_vlan", 1)
+        data["radius"]["guest_vlan"]   = _form_int(form, "guest_vlan", 99)
 
     elif section == "tacacs":
         data.setdefault("tacacs", {})
         data["tacacs"]["enabled"] = form.get("enabled") == "on"
-        data["tacacs"]["port"]    = int(form.get("port", 49))
+        data["tacacs"]["port"]    = _form_int(form, "port", 49)
 
     elif section == "portal":
         data.setdefault("portal", {})
-        data["portal"]["session_hours"] = int(form.get("session_hours", 8))
+        data["portal"]["session_hours"] = _form_int(form, "session_hours", 8)
         data["portal"]["guest_ssid"]    = form.get("guest_ssid", "")
         data["portal"]["guest_psk"]     = form.get("guest_psk", "")
 
@@ -372,8 +569,8 @@ async def settings_save(request: Request):
         data.setdefault("display", {})
         data["display"]["enabled"]        = form.get("enabled") == "on"
         data["display"]["driver"]         = form.get("driver", "simulation")
-        data["display"]["rotation"]       = int(form.get("rotation", 270))
-        data["display"]["cycle_interval"] = int(form.get("cycle_interval", 8))
+        data["display"]["rotation"]       = _form_int(form, "rotation", 270)
+        data["display"]["cycle_interval"] = _form_int(form, "cycle_interval", 8)
         screens_raw = form.get("screens", "")
         data["display"]["screens"] = [s.strip() for s in screens_raw.split(",") if s.strip()]
 
@@ -384,14 +581,14 @@ async def settings_save(request: Request):
         sl["address"]  = form.get("address", "/dev/log")
         sl["facility"] = form.get("facility", "local0")
         sl["protocol"] = form.get("protocol", "udp")
-        sl["port"]     = int(form.get("port", 514))
+        sl["port"]     = _form_int(form, "port", 514)
 
     elif section == "log_forwarding_graylog":
         data.setdefault("log_forwarding", {}).setdefault("graylog", {})
         gl = data["log_forwarding"]["graylog"]
         gl["enabled"]  = form.get("enabled") == "on"
         gl["host"]     = form.get("host", "127.0.0.1")
-        gl["port"]     = int(form.get("port", 12201))
+        gl["port"]     = _form_int(form, "port", 12201)
         gl["protocol"] = form.get("protocol", "udp")
 
     elif section == "log_forwarding_webhook":
@@ -400,9 +597,9 @@ async def settings_save(request: Request):
         wh["enabled"]                 = form.get("enabled") == "on"
         wh["url"]                     = form.get("url", "")
         wh["level"]                   = form.get("level", "WARNING")
-        wh["timeout_seconds"]         = float(form.get("timeout_seconds", 3.0))
-        wh["batch_size"]              = int(form.get("batch_size", 10))
-        wh["batch_interval_seconds"]  = float(form.get("batch_interval_seconds", 5.0))
+        wh["timeout_seconds"]         = _form_float(form, "timeout_seconds", 3.0)
+        wh["batch_size"]              = _form_int(form, "batch_size", 10)
+        wh["batch_interval_seconds"]  = _form_float(form, "batch_interval_seconds", 5.0)
         # Parse raw headers textarea ("Key: Value" per line)
         headers: dict[str, str] = {}
         for line in (form.get("headers_raw", "") or "").splitlines():
@@ -722,6 +919,10 @@ async def create_admin_user(
     db: AsyncSession = Depends(get_db),
 ):
     current = _require_auth(request)
+    if len(password) < 8:
+        return RedirectResponse(url="/admin-users?error=Password+must+be+at+least+8+characters", status_code=303)
+    if len(username) < 2 or len(username) > 64:
+        return RedirectResponse(url="/admin-users?error=Username+must+be+2-64+characters", status_code=303)
     existing = (await db.execute(
         select(AdminUser).where(AdminUser.username == username)
     )).scalar_one_or_none()
@@ -753,10 +954,21 @@ async def delete_admin_user(
 async def change_admin_password(
     admin_id: int,
     request: Request,
+    current_password: str = Form(...),
     new_password: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_auth(request)
+    acting_user = _require_auth(request)
+
+    # The acting user must re-confirm their own password before changing any account
+    actor_stmt = select(AdminUser).where(AdminUser.username == acting_user, AdminUser.enabled == True)
+    actor = (await db.execute(actor_stmt)).scalar_one_or_none()
+    if actor is None or not verify_password(current_password, actor.password_hash):
+        return RedirectResponse(url="/admin-users?error=Current+password+incorrect", status_code=303)
+
+    if len(new_password) < 8:
+        return RedirectResponse(url="/admin-users?error=Password+must+be+at+least+8+characters", status_code=303)
+
     a = (await db.execute(select(AdminUser).where(AdminUser.id == admin_id))).scalar_one_or_none()
     if a:
         a.password_hash = hash_password(new_password)
@@ -803,7 +1015,7 @@ async def system_page(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         log_lines = ["(journalctl unavailable — running outside systemd?)"]
 
-    cpu_percent  = await asyncio.get_event_loop().run_in_executor(
+    cpu_percent  = await asyncio.get_running_loop().run_in_executor(
         None, functools.partial(psutil.cpu_percent, interval=1)
     )
     mem          = psutil.virtual_memory()

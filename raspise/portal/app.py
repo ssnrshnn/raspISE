@@ -21,6 +21,7 @@ Endpoints
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -43,6 +44,30 @@ app = FastAPI(title="RaspISE Guest Portal", docs_url=None, redoc_url=None)
 import os
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=_TEMPLATE_DIR)
+
+
+# ---------------------------------------------------------------------------
+# Periodic cleanup: expire guest sessions whose expires_at has passed.
+# Called from main.py _lifespan so it shares the application event loop.
+# ---------------------------------------------------------------------------
+
+async def expire_guest_sessions_loop() -> None:
+    """Background task: mark overdue guest sessions inactive every 60 s."""
+    from sqlalchemy import update
+    from raspise.db.database import AsyncSessionLocal
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                now = utcnow()
+                await db.execute(
+                    update(GuestSession)
+                    .where(GuestSession.active == True, GuestSession.expires_at <= now)
+                    .values(active=False)
+                )
+                await db.commit()
+        except Exception as exc:
+            log.warning("Guest-session expiry cleanup failed: %s", exc)
+        await asyncio.sleep(60)
 
 
 # ---------------------------------------------------------------------------
@@ -110,16 +135,14 @@ async def register(
     except ValueError:
         norm_mac = ""
 
-    # Expire any existing session for this MAC
+    # Expire any existing active sessions for this MAC atomically
     if norm_mac:
-        from sqlalchemy import select, update
-        stmt = (
-            select(GuestSession)
+        from sqlalchemy import update
+        await db.execute(
+            update(GuestSession)
             .where(GuestSession.mac_address == norm_mac, GuestSession.active == True)
+            .values(active=False)
         )
-        existing = (await db.execute(stmt)).scalars().all()
-        for s in existing:
-            s.active = False
         await db.flush()
 
     expires_at = utcnow() + timedelta(hours=cfg.session_hours)
@@ -137,26 +160,33 @@ async def register(
     log.info("Guest registered: name=%r email=%r mac=%s expires=%s",
              full_name, email, norm_mac, expires_at.isoformat())
 
-    # Build Wi-Fi QR code payload (WPA format)
-    qr_payload = f"WIFI:T:WPA;S:{cfg.guest_ssid};P:{cfg.guest_psk};;"
+    # Redirect to success page using only the opaque session token
+    # (PSK is never placed in the URL — /success reads it from server config)
     return RedirectResponse(
-        url=f"/success?token={session.token}&qr={qr_payload}",
+        url=f"/success?token={session.token}",
         status_code=303,
     )
 
 
 @app.get("/success", response_class=HTMLResponse)
-async def success(request: Request, token: str = "", qr: str = ""):
+async def success(request: Request, token: str = "", db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
     cfg = get_config().portal
 
-    # Generate QR code image as base64
+    # Verify the token maps to a real session (prevents random /success visits)
+    sess = None
+    if token:
+        stmt = select(GuestSession).where(GuestSession.token == token)
+        sess = (await db.execute(stmt)).scalar_one_or_none()
+
+    # Generate QR code image from server-side config — PSK never leaves the server
     qr_base64 = ""
-    if qr:
-        import io, base64, qrcode
-        img = qrcode.make(qr)
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        qr_base64 = base64.b64encode(buf.getvalue()).decode()
+    import io, base64, qrcode
+    qr_payload = f"WIFI:T:WPA;S:{cfg.guest_ssid};P:{cfg.guest_psk};;"
+    img = qrcode.make(qr_payload)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    qr_base64 = base64.b64encode(buf.getvalue()).decode()
 
     return templates.TemplateResponse(request, "success.html", {
         "request":   request,
@@ -184,5 +214,5 @@ async def session_status(mac: str, db: AsyncSession = Depends(get_db)):
     )
     sess = (await db.execute(stmt)).scalar_one_or_none()
     if sess:
-        return {"active": True, "expires_at": sess.expires_at.isoformat(), "email": sess.email}
+        return {"active": True, "expires_at": sess.expires_at.isoformat()}
     return {"active": False}

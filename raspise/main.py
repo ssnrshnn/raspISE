@@ -131,11 +131,34 @@ async def _lifespan(_app):
     # ── Startup ──────────────────────────────────────────────────────
     setup_logging()
     cfg  = get_config()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
+    bus.set_loop(loop)
 
     log.info("═══════════════════════════════════════")
     log.info("  RaspISE v1.0  —  %s", cfg.server.name)
     log.info("═══════════════════════════════════════")
+
+    # Warn if using insecure default secret key
+    _INSECURE_KEYS = {"change_me", "CHANGE_ME_USE_A_STRONG_RANDOM_STRING", ""}
+    if cfg.server.secret_key in _INSECURE_KEYS:
+        log.warning(
+            "╔════════════════════════════════════════════════════════════╗"
+        )
+        log.warning(
+            "║  WARNING: server.secret_key is set to the default value!  ║"
+        )
+        log.warning(
+            "║  JWT tokens and session cookies are NOT secure.           ║"
+        )
+        log.warning(
+            "║  Generate a new key: python3 -c 'import secrets;          ║"
+        )
+        log.warning(
+            "║    print(secrets.token_hex(32))'                          ║"
+        )
+        log.warning(
+            "╚════════════════════════════════════════════════════════════╝"
+        )
 
     await init_db()
     await _seed_database()
@@ -153,6 +176,10 @@ async def _lifespan(_app):
 
         # Device profiler
         _start_profiler(loop)
+
+        # Guest session expiry cleanup
+        from raspise.portal.app import expire_guest_sessions_loop
+        asyncio.ensure_future(expire_guest_sessions_loop())
 
         # Publish system-start event
         await bus.publish(Event(EventType.SYSTEM_START, data={"node": cfg.server.name}))

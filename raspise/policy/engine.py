@@ -117,6 +117,8 @@ def _eval_condition(cond: dict[str, Any], ctx: AuthContext) -> bool:
     if ctype == "nas_ip":
         if op == "equals":
             return ctx.nas_ip == val
+        if op == "startswith":
+            return ctx.nas_ip.startswith(val)
         if op == "in":
             return ctx.nas_ip in (val if isinstance(val, list) else [val])
 
@@ -131,7 +133,18 @@ def _string_match(subject: str, op: str, pattern: str) -> bool:
     if op == "startswith": return s.startswith(p)
     if op == "endswith":   return s.endswith(p)
     if op == "contains":   return p in s
-    if op == "regex":      return bool(re.search(pattern, subject, re.IGNORECASE))
+    if op == "regex":
+        try:
+            # Compile with a size guard — reject patterns over 256 chars to mitigate ReDoS
+            if len(pattern) > 256:
+                log.warning("Regex pattern too long (%d chars) — treating as no-match", len(pattern))
+                return False
+            compiled = re.compile(pattern, re.IGNORECASE)
+            # Use re.search with a bounded subject
+            return bool(compiled.search(subject[:1024]))
+        except re.error as exc:
+            log.warning("Invalid regex pattern %r in policy condition: %s", pattern, exc)
+            return False
     return False
 
 

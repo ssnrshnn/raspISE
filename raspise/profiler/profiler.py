@@ -183,14 +183,19 @@ class DeviceProfiler:
             log.warning("Scapy not available — device profiler disabled. Install scapy.")
             return
 
+        iface = self._resolve_iface()
         try:
-            sniff(
-                iface=self._resolve_iface(),
-                filter="udp port 67 or 68 or arp",
-                prn=self._process_packet,
-                store=False,
-                stop_filter=lambda _: not self._running,
-            )
+            # Use timeout=1.0 so the loop re-checks self._running at least once per
+            # second even when no packets arrive, ensuring stop() returns promptly.
+            while self._running:
+                sniff(
+                    iface=iface,
+                    filter="udp port 67 or 68 or arp",
+                    prn=self._process_packet,
+                    store=False,
+                    stop_filter=lambda _: not self._running,
+                    timeout=1.0,
+                )
         except Exception as exc:
             log.error("Profiler sniffer error: %s", exc)
 
@@ -251,6 +256,7 @@ class DeviceProfiler:
         vendor                 = self._oui.lookup(mac)
         device_type, os_type   = infer_device_type(vendor + " " + vendor_cls, hostname, dhcp_fp)
 
+        from sqlalchemy.exc import IntegrityError
         async with AsyncSessionLocal() as db:
             from sqlalchemy import select
             stmt = select(Device).where(Device.mac_address == mac)
@@ -268,7 +274,22 @@ class DeviceProfiler:
             if os_type:         dev.os_type           = os_type
             if dhcp_fp:         dev.dhcp_fingerprint  = dhcp_fp
 
-            await db.commit()
+            try:
+                await db.commit()
+            except IntegrityError:
+                # Race condition: another coroutine inserted the same MAC
+                await db.rollback()
+                # Retry as update only
+                dev = (await db.execute(stmt)).scalar_one_or_none()
+                if dev:
+                    if hostname:    dev.hostname         = hostname
+                    if ip:          dev.ip_address       = ip
+                    if vendor:      dev.vendor           = vendor
+                    if device_type: dev.device_type      = device_type
+                    if os_type:     dev.os_type          = os_type
+                    if dhcp_fp:     dev.dhcp_fingerprint = dhcp_fp
+                    await db.commit()
+                is_new = False
 
         etype = EventType.NEW_DEVICE if is_new else EventType.DEVICE_UPDATED
         bus.publish_sync(Event(etype, data={

@@ -28,6 +28,7 @@ psutil>=5.9.8
 # ── Display (Raspberry Pi SPI / TFT) ─────────────────────────────────────────
 pillow>=10.3.0
 qrcode>=7.4.2
+numpy>=1.26.0          # RGB565 conversion for ILI9341 display driver
 # Pi-specific packages (installed by install.sh on target hardware):
 #   spidev
 #   RPi.GPIO

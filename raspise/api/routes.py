@@ -47,7 +47,8 @@ import json
 from datetime import date, datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -61,7 +62,7 @@ from raspise.api.schemas import (
     GroupCreate, GroupOut,
     GuestSessionCreate, GuestSessionOut,
     LoginRequest, PolicyCreate, PolicyOut, PolicyUpdate,
-    StatusResponse, TokenResponse,
+    StatusResponse, TacacsLogOut, TokenResponse,
     UserCreate, UserOut, UserUpdate,
     DeviceOut, DeviceUpdate,
 )
@@ -79,15 +80,27 @@ router = APIRouter(prefix="/api/v1")
 # Auth
 # ---------------------------------------------------------------------------
 
+# Rate limiter shared with the web UI
+from raspise.core.ratelimit import check_rate_limit, record_failure, clear_failures
+
 @router.post("/auth/login", response_model=TokenResponse, tags=["Auth"])
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts. Try again in 5 minutes.",
+        )
+
     cfg  = get_config()
     stmt = select(AdminUser).where(AdminUser.username == body.username, AdminUser.enabled == True)
     user = (await db.execute(stmt)).scalar_one_or_none()
 
     if user is None or not verify_password(body.password, user.password_hash):
+        record_failure(ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
+    clear_failures(ip)
     user.last_login = datetime.now(timezone.utc)
     await db.commit()
 
@@ -233,6 +246,28 @@ async def delete_group(
     await db.delete(grp)
     await db.commit()
     return StatusResponse(status="ok", message=f"Group {group_id} deleted")
+
+
+@router.put("/groups/{group_id}", response_model=GroupOut, tags=["Groups"])
+async def update_group(
+    group_id: int,
+    body: GroupCreate,
+    db:   AsyncSession = Depends(get_db),
+    _:    AdminUser    = Depends(get_current_admin),
+):
+    grp = (await db.execute(select(Group).where(Group.id == group_id))).scalar_one_or_none()
+    if not grp:
+        raise HTTPException(404, "Group not found")
+    # Check name uniqueness if changed
+    if body.name != grp.name:
+        existing = (await db.execute(select(Group).where(Group.name == body.name))).scalar_one_or_none()
+        if existing:
+            raise HTTPException(409, "Group name already exists")
+    grp.name = body.name
+    grp.description = body.description
+    await db.commit()
+    await db.refresh(grp)
+    return GroupOut.model_validate(grp)
 
 
 # ---------------------------------------------------------------------------
@@ -385,30 +420,26 @@ async def auth_logs(
 ):
     stmt = select(AuthLog).order_by(AuthLog.timestamp.desc()).offset(skip).limit(limit)
     if result:
-        stmt = stmt.where(AuthLog.result == result.upper())
+        result_upper = result.upper()
+        valid_results = {e.value for e in AuthResult}
+        if result_upper not in valid_results:
+            raise HTTPException(400, f"Invalid result filter. Must be one of: {', '.join(sorted(valid_results))}")
+        stmt = stmt.where(AuthLog.result == result_upper)
     if username:
         stmt = stmt.where(AuthLog.username.ilike(f"%{username}%"))
     rows = (await db.execute(stmt)).scalars().all()
     return [AuthLogOut.model_validate(r) for r in rows]
 
 
-@router.get("/logs/tacacs", tags=["Logs"])
+@router.get("/logs/tacacs", response_model=list[TacacsLogOut], tags=["Logs"])
 async def tacacs_logs(
     skip: int = 0, limit: int = Query(100, le=500),
     db: AsyncSession = Depends(get_db),
     _:  AdminUser    = Depends(get_current_admin),
 ):
-    from raspise.db.models import TacacsLog
     stmt = select(TacacsLog).order_by(TacacsLog.timestamp.desc()).offset(skip).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
-    return [
-        {
-            "id": r.id, "timestamp": r.timestamp, "type": r.packet_type,
-            "username": r.username, "remote_ip": r.remote_ip,
-            "command": r.command, "result": r.result, "priv_lvl": r.privilege_level,
-        }
-        for r in rows
-    ]
+    return [TacacsLogOut.model_validate(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -511,4 +542,32 @@ async def dashboard_stats(
         active_sessions=active_sess, auth_today=auth_today,
         auth_success_today=auth_success_today, auth_failure_today=auth_fail_today,
         guest_sessions_active=guest_active,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Health Check (no auth required — for load balancers / monitoring)
+# ---------------------------------------------------------------------------
+
+@router.get("/health", tags=["Health"])
+async def health_check(db: AsyncSession = Depends(get_db)):
+    """Basic liveness/readiness probe. Returns 200 if the DB is reachable."""
+    try:
+        await db.execute(select(func.count()).select_from(User))
+        db_ok = True
+    except Exception:
+        db_ok = False
+
+    cfg = get_config()
+    status_val = "healthy" if db_ok else "degraded"
+    code = 200 if db_ok else 503
+    return JSONResponse(
+        status_code=code,
+        content={
+            "status": status_val,
+            "database": "ok" if db_ok else "unreachable",
+            "server_name": cfg.server.name,
+            "radius_enabled": cfg.radius.enabled,
+            "tacacs_enabled": cfg.tacacs.enabled,
+        },
     )

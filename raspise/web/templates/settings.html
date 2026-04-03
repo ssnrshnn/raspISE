@@ -422,7 +422,10 @@ document.querySelectorAll('.test-btn').forEach(btn => {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
     try {
-      const resp = await fetch('/settings/test-log/' + target, { method: 'POST' });
+      const resp = await fetch('/settings/test-log/' + target, {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': window.CSRF_TOKEN || '' }
+      });
       const data = await resp.json();
       if (resultEl) {
         resultEl.className = 'ms-2 small ' + (data.ok ? 'text-success' : 'text-danger');

@@ -196,6 +196,8 @@ class WebhookHandler(logging.Handler):
         hostname = socket.gethostname()
         batch: list[logging.LogRecord] = []
         last_flush = time.monotonic()
+        consecutive_failures = 0
+        _MAX_BACKOFF = 300  # cap at 5 minutes
 
         while True:
             # Drain up to batch_size records, waiting at most batch_interval
@@ -213,7 +215,9 @@ class WebhookHandler(logging.Handler):
                 pass
 
             elapsed = time.monotonic() - last_flush
-            if batch and (len(batch) >= self._batch_size or elapsed >= self._batch_interval):
+            # Exponential backoff: wait longer between retries on repeated failures
+            backoff_delay = min(self._batch_interval * (2 ** consecutive_failures), _MAX_BACKOFF)
+            if batch and (len(batch) >= self._batch_size or elapsed >= backoff_delay):
                 payload = json.dumps({
                     "source":  "RaspISE",
                     "host":    hostname,
@@ -239,8 +243,10 @@ class WebhookHandler(logging.Handler):
                 try:
                     with urllib.request.urlopen(req, timeout=self._timeout):
                         pass
+                    consecutive_failures = 0  # reset on success
                 except Exception as exc:
-                    sys.stderr.write(f"[RaspISE/Webhook] POST failed: {exc}\n")
+                    consecutive_failures = min(consecutive_failures + 1, 8)
+                    sys.stderr.write(f"[RaspISE/Webhook] POST failed (attempt {consecutive_failures}): {exc}\n")
 
                 batch.clear()
                 last_flush = time.monotonic()

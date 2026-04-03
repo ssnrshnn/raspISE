@@ -29,8 +29,8 @@ class TokenResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1)
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +223,7 @@ class GuestSessionCreate(BaseModel):
     full_name:      str
     email:          str | None = None
     mac_address:    str | None = None
-    duration_hours: int        = 8
+    duration_hours: int        = Field(8, ge=1, le=168)
 
 
 class GuestSessionOut(BaseModel):
@@ -233,5 +233,22 @@ class GuestSessionOut(BaseModel):
     mac_address: str
     expires_at:  datetime
     active:      bool
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# TACACS+ Logs
+# ---------------------------------------------------------------------------
+
+class TacacsLogOut(BaseModel):
+    id:              int
+    timestamp:       datetime
+    packet_type:     str
+    username:        str
+    remote_ip:       str
+    command:         str
+    result:          str
+    privilege_level: int
 
     model_config = {"from_attributes": True}

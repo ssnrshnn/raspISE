@@ -11,31 +11,69 @@ class Base(DeclarativeBase):
     pass
 
 
-def _make_engine():
-    cfg = get_config()
-    return create_async_engine(
-        cfg.database.url,
-        echo=cfg.server.debug,
-        pool_pre_ping=True,
-    )
+# Lazy engine singleton — created on first access, not at import time
+_engine = None
+_session_factory = None
 
 
-# Module-level singletons
-engine = _make_engine()
-AsyncSessionLocal = async_sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+def _get_engine():
+    global _engine
+    if _engine is None:
+        cfg = get_config()
+        _engine = create_async_engine(
+            cfg.database.url,
+            echo=cfg.server.debug,
+            pool_pre_ping=True,
+        )
+    return _engine
+
+
+def _get_session_factory():
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = async_sessionmaker(
+            bind=_get_engine(),
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+    return _session_factory
+
+
+# Public accessors — backwards compatible
+@property
+def _engine_prop():
+    return _get_engine()
+
+
+class _EngineProxy:
+    """Proxy that lazily creates the engine on first attribute access."""
+    def __getattr__(self, name):
+        return getattr(_get_engine(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_engine()(*args, **kwargs)
+
+
+class _SessionProxy:
+    """Proxy that lazily creates the session factory on first call."""
+    def __call__(self, *args, **kwargs):
+        return _get_session_factory()(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(_get_session_factory(), name)
+
+
+engine = _EngineProxy()
+AsyncSessionLocal = _SessionProxy()
 
 
 async def get_db() -> AsyncSession:
     """FastAPI dependency — yields an async session."""
-    async with AsyncSessionLocal() as session:
+    async with _get_session_factory()() as session:
         yield session
 
 
 async def init_db() -> None:
     """Create all tables (run once on startup)."""
-    async with engine.begin() as conn:
+    async with _get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

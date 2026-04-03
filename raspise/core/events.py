@@ -51,6 +51,11 @@ class EventBus:
         self._max_queue_size = max_queue_size
         self._subscribers: list[asyncio.Queue[Event]] = []
         self._lock = asyncio.Lock()
+        self._main_loop: asyncio.AbstractEventLoop | None = None
+
+    def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Register the main event loop so sync callers can schedule coroutines."""
+        self._main_loop = loop
 
     async def subscribe(self) -> asyncio.Queue[Event]:
         """Register a new subscriber and return its private queue."""
@@ -80,14 +85,9 @@ class EventBus:
 
     def publish_sync(self, event: Event) -> None:
         """Fire-and-forget from sync code (e.g. RADIUS server thread)."""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self.publish(event))
-            else:
-                loop.run_until_complete(self.publish(event))
-        except RuntimeError:
-            pass
+        if self._main_loop and self._main_loop.is_running():
+            asyncio.run_coroutine_threadsafe(self.publish(event), self._main_loop)
+        # Silently discard events published before the loop is ready
 
 
 # Module-level singleton — import this everywhere

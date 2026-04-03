@@ -79,7 +79,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     email: Mapped[str]         = mapped_column(String(128), default="")
     full_name: Mapped[str]     = mapped_column(String(128), default="")
-    group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id"), nullable=True)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
     enabled: Mapped[bool]      = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -151,7 +151,7 @@ class Policy(Base):
         Enum(PolicyAction), default=PolicyAction.PERMIT, nullable=False
     )
     vlan: Mapped[int | None]  = mapped_column(Integer, nullable=True)
-    group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id"), nullable=True)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
     enabled: Mapped[bool]     = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()

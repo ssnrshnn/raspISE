@@ -30,7 +30,7 @@ import re
 import struct
 import threading
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import Any
 
 import pyrad.dictionary
 import pyrad.packet
@@ -42,7 +42,7 @@ from raspise.core.logger import get_logger
 from raspise.core.utils import normalise_mac, chap_verify
 from raspise.db.database import AsyncSessionLocal
 from raspise.db.models import (
-    AuthLog, AuthMethod, AuthResult, ActiveSession, Device, User
+    AuthLog, AuthMethod, AuthResult, ActiveSession, Device, NasClient, PolicyAction, User
 )
 from raspise.policy.engine import AuthContext, engine as policy_engine
 
@@ -73,6 +73,8 @@ class RaspISERadiusServer(pyrad.server.Server):
             c.address: c.secret for c in self._cfg.clients
         }
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._last_client_reload: float = 0.0
+        self._client_reload_interval: float = 30.0  # reload DB clients every 30s
 
         dict_path = _DICT_PATH if os.path.isfile(_DICT_PATH) else None
         hosts = {
@@ -88,12 +90,40 @@ class RaspISERadiusServer(pyrad.server.Server):
         )
 
     # ------------------------------------------------------------------
+    # Hot-reload NAS clients from DB
+    # ------------------------------------------------------------------
+
+    def _maybe_reload_db_clients(self) -> None:
+        """Periodically refresh NAS clients from the database."""
+        import time
+        now = time.monotonic()
+        if now - self._last_client_reload < self._client_reload_interval:
+            return
+        self._last_client_reload = now
+        if not self._loop:
+            return
+        try:
+            db_clients = asyncio.run_coroutine_threadsafe(
+                _load_db_nas_clients(), self._loop
+            ).result(timeout=5)
+            for ip, secret in db_clients:
+                if ip not in self._clients:
+                    self._clients[ip] = secret
+                    self.hosts[ip] = pyrad.server.RemoteHost(ip, secret.encode(), ip)
+                    log.info("Hot-loaded NAS client %s from database", ip)
+        except Exception as exc:
+            log.debug("NAS client reload failed: %s", exc)
+
+    # ------------------------------------------------------------------
     # Authentication handler
     # ------------------------------------------------------------------
 
     def HandleAuthPacket(self, pkt: pyrad.packet.AuthPacket) -> None:  # noqa: N802
         nas_ip = pkt.source[0]
         log.debug("RADIUS Auth from NAS %s", nas_ip)
+
+        # Hot-reload NAS clients from DB if needed
+        self._maybe_reload_db_clients()
 
         # Reject unknown NAS clients early
         if nas_ip not in self._clients:
@@ -103,10 +133,18 @@ class RaspISERadiusServer(pyrad.server.Server):
         # Determine auth method from packet attributes
         method, username, result, reason = self._authenticate(pkt)
 
+        # If credentials passed, run the policy engine for the final decision
+        policy_vlan: int | None = None
+        policy_name: str = ""
+        if result == AuthResult.SUCCESS:
+            policy_vlan, result, reason, policy_name = self._run_sync(
+                self._apply_policy(username, pkt, method)
+            )
+
         # Build reply
         if result == AuthResult.SUCCESS:
             reply = pkt.CreateReply(code=pyrad.packet.AccessAccept)
-            vlan = self._resolve_vlan(username, nas_ip, method, pkt)
+            vlan = policy_vlan if policy_vlan is not None else self._resolve_vlan(username, nas_ip, method, pkt)
             if vlan:
                 # RFC 3580 VLAN assignment attributes
                 try:
@@ -123,7 +161,7 @@ class RaspISERadiusServer(pyrad.server.Server):
             log.info("Access-REJECT user=%r nas=%s reason=%r", username, nas_ip, reason)
 
         self.SendReplyPacket(pkt.fd, reply)
-        self._log_auth(pkt, username, method, result, reason)
+        self._log_auth(pkt, username, method, result, reason, policy_name, policy_vlan)
         self._publish(username, pkt, method, result, reason)
 
     # ------------------------------------------------------------------
@@ -182,7 +220,7 @@ class RaspISERadiusServer(pyrad.server.Server):
         raw_pw = pkt.get("User-Password", [b""])[0]
         password = _decode_pap_password(raw_pw, pkt.secret, pkt.authenticator)
 
-        result, reason = _run_sync(self._check_user_password(username, password))
+        result, reason = self._run_sync(self._check_user_password(username, password))
         return AuthMethod.PAP, username, result, reason
 
     # .... CHAP ....
@@ -194,9 +232,9 @@ class RaspISERadiusServer(pyrad.server.Server):
         chap_resp   = chap_pw[1:17]
         challenge   = pkt.get("CHAP-Challenge", [pkt.authenticator])[0]
 
-        db_password = _run_sync(self._get_cleartext_password(username))
+        db_password = self._run_sync(self._get_cleartext_password(username))
         if db_password is None:
-            return AuthMethod.CHAP, username, AuthResult.FAILURE, "Unknown user"
+            return AuthMethod.CHAP, username, AuthResult.FAILURE, "CHAP not supported (only bcrypt hashes stored — use PAP or EAP)"
 
         if chap_verify(chap_id, db_password, chap_resp + challenge):
             return AuthMethod.CHAP, username, AuthResult.SUCCESS, ""
@@ -212,7 +250,7 @@ class RaspISERadiusServer(pyrad.server.Server):
         except ValueError:
             return AuthMethod.MAB, mac_raw, AuthResult.FAILURE, "Invalid MAC"
 
-        result, reason = _run_sync(self._check_device_authorized(mac))
+        result, reason = self._run_sync(self._check_device_authorized(mac))
         return AuthMethod.MAB, mac, result, reason
 
     # .... EAP (passthrough notice) ....
@@ -270,9 +308,15 @@ class RaspISERadiusServer(pyrad.server.Server):
         from sqlalchemy import select, delete
         async with AsyncSessionLocal() as db:
             if status in (1, "Start"):
+                mac_raw = pkt.get("Calling-Station-Id", [""])[0]
+                try:
+                    mac = normalise_mac(mac_raw)
+                except ValueError:
+                    mac = mac_raw
                 sess = ActiveSession(
                     session_id=session_id, username=username,
-                    ip_address=ip, nas_ip=nas_ip, nas_port=nas_port,
+                    mac_address=mac, ip_address=ip,
+                    nas_ip=nas_ip, nas_port=nas_port,
                 )
                 db.add(sess)
             elif status in (2, "Stop"):
@@ -291,14 +335,78 @@ class RaspISERadiusServer(pyrad.server.Server):
     # ---- VLAN resolution ----
 
     def _resolve_vlan(self, username, nas_ip, method, pkt) -> int | None:
+        """Fallback VLAN when no policy-supplied VLAN is available."""
         cfg = self._cfg
         if method == AuthMethod.MAB:
             return cfg.guest_vlan
         return cfg.default_vlan
 
+    # ---- Policy evaluation ----
+
+    async def _apply_policy(
+        self, username: str, pkt, method: AuthMethod
+    ) -> tuple[int | None, AuthResult, str, str]:
+        """Build an AuthContext and run the policy engine.
+
+        Returns ``(vlan, result, reason, policy_name)``.
+        """
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+
+        nas_ip  = pkt.source[0]
+        mac_raw = pkt.get("Calling-Station-Id", [""])[0]
+        try:
+            mac = normalise_mac(mac_raw)
+        except ValueError:
+            mac = mac_raw
+
+        group_name  = ""
+        device_type = "unknown"
+
+        async with AsyncSessionLocal() as db:
+            if method == AuthMethod.MAB:
+                # For MAB the subject is the device, not a user
+                stmt = select(Device).where(Device.mac_address == (mac or username))
+                dev = (await db.execute(stmt)).scalar_one_or_none()
+                if dev:
+                    device_type = dev.device_type or "unknown"
+            else:
+                stmt = (
+                    select(User)
+                    .options(selectinload(User.group))
+                    .where(User.username == username, User.enabled == True)
+                )
+                user = (await db.execute(stmt)).scalar_one_or_none()
+                if user and user.group:
+                    group_name = user.group.name
+
+            ctx = AuthContext(
+                username=username,
+                mac_address=mac,
+                nas_ip=nas_ip,
+                auth_method=str(method.value),
+                group_name=group_name,
+                device_type=device_type,
+            )
+
+            decision = await policy_engine.evaluate(ctx, db)
+
+        if decision.action == PolicyAction.PERMIT:
+            return decision.vlan, AuthResult.SUCCESS, "", decision.policy_name
+        if decision.action == PolicyAction.GUEST:
+            return self._cfg.guest_vlan, AuthResult.SUCCESS, "GUEST access", decision.policy_name
+        return None, AuthResult.FAILURE, f"Policy denied: {decision.reason}", decision.policy_name
+
+    # ---- Sync bridge ----
+
+    def _run_sync(self, coro) -> Any:
+        """Run *coro* from the RADIUS thread using the stored asyncio loop."""
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result(timeout=10)
+
     # ---- Auth logging ----
 
-    def _log_auth(self, pkt, username, method, result, reason) -> None:
+    def _log_auth(self, pkt, username, method, result, reason, policy_name: str = "", vlan: int | None = None) -> None:
         nas_ip  = pkt.source[0]
         mac_raw = pkt.get("Calling-Station-Id", [""])[0]
         try:
@@ -308,11 +416,14 @@ class RaspISERadiusServer(pyrad.server.Server):
 
         if self._loop:
             asyncio.run_coroutine_threadsafe(
-                self._write_auth_log(username, mac, nas_ip, method, result, reason),
+                self._write_auth_log(username, mac, nas_ip, method, result, reason, policy_name, vlan),
                 self._loop,
             )
 
-    async def _write_auth_log(self, username, mac, nas_ip, method, result, reason) -> None:
+    async def _write_auth_log(
+        self, username, mac, nas_ip, method, result, reason,
+        policy_name: str = "", vlan: int | None = None,
+    ) -> None:
         async with AsyncSessionLocal() as db:
             log_entry = AuthLog(
                 username=username,
@@ -321,6 +432,8 @@ class RaspISERadiusServer(pyrad.server.Server):
                 auth_method=method,
                 result=result,
                 reason=reason,
+                policy_name=policy_name,
+                vlan=vlan,
             )
             db.add(log_entry)
             await db.commit()
@@ -364,30 +477,20 @@ def _decode_pap_password(encrypted: bytes, secret: bytes, authenticator: bytes) 
     return result.rstrip(b"\x00").decode("utf-8", errors="replace")
 
 
-def _run_sync(coro) -> Any:
-    """Run an async coroutine from synchronous code."""
-    import asyncio
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-            future = concurrent.futures.Future()
-
-            async def _wrapper():
-                try:
-                    future.set_result(await coro)
-                except Exception as exc:
-                    future.set_exception(exc)
-
-            asyncio.ensure_future(_wrapper())
-            return future.result(timeout=5)
-        else:
-            return loop.run_until_complete(coro)
-    except RuntimeError:
-        return asyncio.run(coro)
-
-
 from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# DB helper for NAS client loading
+# ---------------------------------------------------------------------------
+
+async def _load_db_nas_clients() -> list[tuple[str, str]]:
+    """Return list of (ip_address, secret) for all enabled NAS clients in DB."""
+    from sqlalchemy import select
+    async with AsyncSessionLocal() as db:
+        stmt = select(NasClient).where(NasClient.enabled == True)
+        clients = (await db.execute(stmt)).scalars().all()
+        return [(c.ip_address, c.secret) for c in clients]
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +502,21 @@ def run_radius_server(loop: asyncio.AbstractEventLoop) -> None:
     cfg = get_config().radius
     server = RaspISERadiusServer()
     server._loop = loop
+
+    # Merge NAS clients from the DB into the server (on top of YAML clients)
+    try:
+        db_clients = asyncio.run_coroutine_threadsafe(
+            _load_db_nas_clients(), loop
+        ).result(timeout=10)
+        for ip, secret in db_clients:
+            if ip not in server._clients:
+                server._clients[ip] = secret
+                server.hosts[ip] = pyrad.server.RemoteHost(ip, secret.encode(), ip)
+        if db_clients:
+            log.info("Loaded %d NAS client(s) from database", len(db_clients))
+    except Exception as exc:
+        log.warning("Could not load NAS clients from DB: %s", exc)
+
     server.BindToAddress(cfg.host)
 
     log.info(
