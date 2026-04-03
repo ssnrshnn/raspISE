@@ -34,7 +34,10 @@ from raspise.config import get_config
 from raspise.core.events import bus, Event, EventType
 from raspise.core.logger import get_logger
 from raspise.db.database import AsyncSessionLocal
-from raspise.db.models import TacacsLog, TacacsPacketType, PolicyAction, User
+from raspise.db.models import (
+    TacacsClient, TacacsLog, TacacsPacketType, PolicyAction, User, CommandRuleAction,
+    Group, CommandSet, CommandRule,
+)
 from raspise.policy.engine import AuthContext, engine as policy_engine
 
 log = get_logger(__name__)
@@ -514,9 +517,16 @@ async def _verify_user(username: str, password: str) -> bool:
         from sqlalchemy import select
         stmt = select(User).where(User.username == username, User.enabled == True)
         user = (await db.execute(stmt)).scalar_one_or_none()
-        if user is None:
-            return False
-        return bcrypt.checkpw(password.encode(), user.password_hash.encode())
+        if user is not None:
+            return bcrypt.checkpw(password.encode(), user.password_hash.encode())
+
+        # User not found locally → try LDAP if enabled
+        from raspise.auth.ldap import ldap_authenticate, ldap_auto_provision
+        ldap_result = await ldap_authenticate(username, password)
+        if ldap_result is not None:
+            await ldap_auto_provision(username, ldap_result, db)
+            return True
+        return False
 
 
 async def _is_user_authorized(username: str, priv_lvl: int, command: str, nas_ip: str = "") -> bool:
@@ -524,15 +534,20 @@ async def _is_user_authorized(username: str, priv_lvl: int, command: str, nas_ip
     Authorize a TACACS+ command request.
 
     1. Confirm the user exists and is enabled.
-    2. Run the policy engine — the same policies that govern RADIUS also apply here.
-    3. Fall back to group-based heuristic only when no policies match (DENY is default).
+    2. Load the user's group → command set and evaluate command rules.
+    3. If no command set is assigned, fall back to the policy engine.
+    4. GUEST policy action → allow read-only show commands only.
     """
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
     async with AsyncSessionLocal() as db:
         stmt = (
             select(User)
-            .options(selectinload(User.group))
+            .options(
+                selectinload(User.group)
+                .selectinload(Group.command_set)
+                .selectinload(CommandSet.rules)
+            )
             .where(User.username == username, User.enabled == True)
         )
         user = (await db.execute(stmt)).scalar_one_or_none()
@@ -541,6 +556,11 @@ async def _is_user_authorized(username: str, priv_lvl: int, command: str, nas_ip
 
         group_name = user.group.name if user.group else ""
 
+        # Check command set rules if group has one assigned
+        if user.group and user.group.command_set and user.group.command_set.rules:
+            return _evaluate_command_rules(user.group.command_set.rules, command)
+
+        # No command set — fall back to policy engine
         ctx = AuthContext(
             username=username,
             nas_ip=nas_ip,
@@ -557,6 +577,23 @@ async def _is_user_authorized(username: str, priv_lvl: int, command: str, nas_ip
     return command.strip().lower().startswith("show")
 
 
+def _evaluate_command_rules(rules, command: str) -> bool:
+    """Evaluate command rules in priority order. First match wins. Default deny."""
+    import fnmatch
+    cmd_lower = command.strip().lower()
+    for rule in sorted(rules, key=lambda r: r.priority):
+        pattern = rule.command_pattern.strip().lower()
+        if fnmatch.fnmatch(cmd_lower, pattern):
+            # If args_pattern is set, also check the full command string
+            if rule.args_pattern:
+                args_pat = rule.args_pattern.strip().lower()
+                if not fnmatch.fnmatch(cmd_lower, args_pat):
+                    continue
+            return rule.action == CommandRuleAction.PERMIT
+    # Default deny if no rule matched
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Server entry point
 # ---------------------------------------------------------------------------
@@ -570,6 +607,30 @@ async def run_tacacs_server() -> None:
         client_keys[c.address] = c.key.encode()
     allowed = set(client_keys.keys()) if cfg.clients else set()
 
+    # ── Background task: hot-reload clients from DB every 30s ─────────
+    async def _reload_clients():
+        from sqlalchemy import select as sa_select
+        while True:
+            await asyncio.sleep(30)
+            try:
+                async with AsyncSessionLocal() as db:
+                    rows = (await db.execute(
+                        sa_select(TacacsClient).where(TacacsClient.enabled == True)
+                    )).scalars().all()
+                    for row in rows:
+                        ip = row.ip_address
+                        if ip not in client_keys:
+                            client_keys[ip] = row.key.encode()
+                            allowed.add(ip)
+                            log.info("Hot-loaded TACACS+ client %s (%s) from database", ip, row.name)
+                        elif client_keys[ip] != row.key.encode():
+                            client_keys[ip] = row.key.encode()
+                            log.info("Updated TACACS+ client key for %s (%s)", ip, row.name)
+            except Exception as exc:
+                log.debug("TACACS+ client reload failed: %s", exc)
+
+    reload_task = asyncio.create_task(_reload_clients())
+
     async def _client_cb(reader, writer):
         peer_ip = writer.get_extra_info("peername", ("?", 0))[0]
         # Use per-client key if configured, otherwise fall back to global key
@@ -579,5 +640,8 @@ async def run_tacacs_server() -> None:
 
     server = await asyncio.start_server(_client_cb, cfg.host, cfg.port)
     log.info("TACACS+ server listening on %s:%d", cfg.host, cfg.port)
-    async with server:
-        await server.serve_forever()
+    try:
+        async with server:
+            await server.serve_forever()
+    finally:
+        reload_task.cancel()

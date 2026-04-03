@@ -293,11 +293,19 @@ class RaspISERadiusServer(pyrad.server.Server):
             from sqlalchemy import select
             stmt = select(User).where(User.username == username, User.enabled == True)
             row = (await db.execute(stmt)).scalar_one_or_none()
-            if row is None:
-                return AuthResult.FAILURE, "Unknown user"
-            if not bcrypt.checkpw(password.encode(), row.password_hash.encode()):
+            if row is not None:
+                if bcrypt.checkpw(password.encode(), row.password_hash.encode()):
+                    return AuthResult.SUCCESS, ""
+                # Local user exists but wrong password — don't fall through to LDAP
                 return AuthResult.FAILURE, "Wrong password"
-            return AuthResult.SUCCESS, ""
+
+            # User not found locally → try LDAP if enabled
+            from raspise.auth.ldap import ldap_authenticate, ldap_auto_provision
+            ldap_result = await ldap_authenticate(username, password)
+            if ldap_result is not None:
+                await ldap_auto_provision(username, ldap_result, db)
+                return AuthResult.SUCCESS, ""
+            return AuthResult.FAILURE, "Unknown user"
 
     async def _get_cleartext_password(self, username: str) -> str | None:
         """For CHAP we need the stored cleartext OR NT-hash. Here we return None

@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from raspise.api.routes import router
 from raspise.config import get_config
+from raspise.radius.freeradius_routes import router as freeradius_router
 
 
 def create_api_app() -> FastAPI:
@@ -25,6 +26,7 @@ def create_api_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(router)
+    app.include_router(freeradius_router)
     return app
 
 

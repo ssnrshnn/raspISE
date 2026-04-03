@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from raspise.db.models import AuthMethod, AuthResult, PolicyAction
+from raspise.db.models import AuthMethod, AuthResult, CommandRuleAction, PolicyAction
 
 
 # ---------------------------------------------------------------------------
@@ -73,15 +73,17 @@ class UserOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 class GroupCreate(BaseModel):
-    name:        str = Field(..., min_length=1, max_length=64)
-    description: str = Field("", max_length=255)
+    name:           str = Field(..., min_length=1, max_length=64)
+    description:    str = Field("", max_length=255)
+    command_set_id: int | None = None
 
 
 class GroupOut(BaseModel):
-    id:          int
-    name:        str
-    description: str
-    created_at:  datetime
+    id:             int
+    name:           str
+    description:    str
+    command_set_id: int | None = None
+    created_at:     datetime
 
     model_config = {"from_attributes": True}
 
@@ -250,5 +252,48 @@ class TacacsLogOut(BaseModel):
     command:         str
     result:          str
     privilege_level: int
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# TACACS+ Command Sets
+# ---------------------------------------------------------------------------
+
+class CommandRuleIn(BaseModel):
+    priority:        int = Field(100, ge=1, le=9999)
+    action:          CommandRuleAction = CommandRuleAction.PERMIT
+    command_pattern: str = Field(..., min_length=1, max_length=256)
+    args_pattern:    str = Field("", max_length=256)
+
+
+class CommandRuleOut(BaseModel):
+    id:              int
+    priority:        int
+    action:          str
+    command_pattern: str
+    args_pattern:    str
+
+    model_config = {"from_attributes": True}
+
+
+class CommandSetCreate(BaseModel):
+    name:        str = Field(..., min_length=1, max_length=64)
+    description: str = Field("", max_length=255)
+    rules:       list[CommandRuleIn] = []
+
+
+class CommandSetUpdate(BaseModel):
+    name:        str | None = Field(None, min_length=1, max_length=64)
+    description: str | None = None
+    rules:       list[CommandRuleIn] | None = None
+
+
+class CommandSetOut(BaseModel):
+    id:          int
+    name:        str
+    description: str
+    created_at:  datetime
+    rules:       list[CommandRuleOut] = []
 
     model_config = {"from_attributes": True}

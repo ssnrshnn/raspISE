@@ -60,7 +60,7 @@ from raspise.config import get_config
 from raspise.db import get_db
 from raspise.db.models import (
     ActiveSession, AdminUser, AuthLog, AuthResult,
-    Device, Group, GuestSession, NasClient, Policy,
+    CommandSet, Device, Group, GuestSession, NasClient, Policy,
     TacacsClient, TacacsLog, User, VlanMapping,
 )
 
@@ -632,6 +632,29 @@ async def settings_save(request: Request):
                 headers[k.strip()] = v.strip()
         wh["headers"] = headers
 
+    elif section == "ldap":
+        data.setdefault("ldap", {})
+        ld = data["ldap"]
+        ld["enabled"]         = form.get("enabled") == "on"
+        ld["server"]          = form.get("server", "ldap://dc.example.com")
+        ld["port"]            = _form_int(form, "port", 389)
+        ld["use_ssl"]         = form.get("use_ssl") == "on"
+        ld["bind_dn"]         = form.get("bind_dn", "")
+        ld["bind_password"]   = form.get("bind_password", "")
+        ld["base_dn"]         = form.get("base_dn", "")
+        ld["user_filter"]     = form.get("user_filter", "(sAMAccountName={username})")
+        ld["group_attribute"] = form.get("group_attribute", "memberOf")
+        # Parse group_map_raw textarea ("LDAP DN = RaspISE group" per line)
+        group_map: dict[str, str] = {}
+        for line in (form.get("group_map_raw", "") or "").splitlines():
+            line = line.strip()
+            if "=" in line:
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip()
+                if k and v:
+                    group_map[k] = v
+        ld["group_map"] = group_map
+
     try:
         with open(cfg_path, "w") as f:
             yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
@@ -669,6 +692,24 @@ async def test_log_forwarding(target: str, request: Request):
     return JSONResponse({"ok": ok, "message": msg})
 
 
+@app.post("/settings/test-ldap")
+async def test_ldap_connection(request: Request):
+    _require_auth(request)
+    cfg = get_config().ldap
+    if not cfg.enabled:
+        return JSONResponse({"ok": False, "message": "LDAP is not enabled."})
+    try:
+        import ldap3
+        server = ldap3.Server(cfg.server, port=cfg.port, use_ssl=cfg.use_ssl, get_info=ldap3.NONE)
+        conn = ldap3.Connection(server, user=cfg.bind_dn, password=cfg.bind_password, auto_bind=True)
+        conn.unbind()
+        return JSONResponse({"ok": True, "message": "LDAP bind successful."})
+    except ImportError:
+        return JSONResponse({"ok": False, "message": "ldap3 not installed (pip install ldap3)."})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "message": str(exc)[:200]})
+
+
 # ---------------------------------------------------------------------------
 # Groups
 # ---------------------------------------------------------------------------
@@ -676,8 +717,9 @@ async def test_log_forwarding(target: str, request: Request):
 @app.get("/groups", response_class=HTMLResponse)
 async def groups_page(request: Request, db: AsyncSession = Depends(get_db)):
     user = _require_auth(request)
+    from sqlalchemy.orm import selectinload
     rows = (await db.execute(
-        select(Group).order_by(Group.name)
+        select(Group).options(selectinload(Group.command_set)).order_by(Group.name)
     )).scalars().all()
     # count users per group
     counts: dict[int, int] = {}
@@ -686,8 +728,11 @@ async def groups_page(request: Request, db: AsyncSession = Depends(get_db)):
             select(func.count()).select_from(User).where(User.group_id == g.id)
         )).scalar_one()
         counts[g.id] = c
+    # command sets for dropdown
+    cs_list = (await db.execute(select(CommandSet).order_by(CommandSet.name))).scalars().all()
     return templates.TemplateResponse(request, "groups.html", {
         "request": request, "user": user, "groups": rows, "counts": counts,
+        "command_sets": cs_list,
         "saved": request.query_params.get("saved"),
         "error": request.query_params.get("error"),
     })
@@ -698,13 +743,15 @@ async def create_group(
     request: Request,
     name: str = Form(...),
     description: str = Form(""),
+    command_set_id: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
     _require_auth(request)
     existing = (await db.execute(select(Group).where(Group.name == name))).scalar_one_or_none()
     if existing:
         return RedirectResponse(url="/groups?error=Group+name+already+exists", status_code=303)
-    db.add(Group(name=name, description=description))
+    cs_id = int(command_set_id) if command_set_id else None
+    db.add(Group(name=name, description=description, command_set_id=cs_id))
     await db.commit()
     return RedirectResponse(url="/groups?saved=1", status_code=303)
 
@@ -752,9 +799,38 @@ async def delete_session(session_id: int, request: Request, db: AsyncSession = D
         select(ActiveSession).where(ActiveSession.id == session_id)
     )).scalar_one_or_none()
     if s:
+        # Send RADIUS Disconnect-Request to the NAS before removing from DB
+        if s.nas_ip and s.session_id:
+            try:
+                nas_secret = await _get_web_nas_secret(s.nas_ip, db)
+                if nas_secret:
+                    from raspise.radius.coa import disconnect_session
+                    await disconnect_session(
+                        session_id=str(s.id),
+                        nas_ip=s.nas_ip,
+                        acct_session_id=s.session_id,
+                        username=s.username,
+                        nas_secret=nas_secret,
+                    )
+            except Exception:
+                pass  # best-effort — still remove from DB
         await db.delete(s)
         await db.commit()
     return RedirectResponse(url="/sessions", status_code=303)
+
+
+async def _get_web_nas_secret(nas_ip: str, db: AsyncSession) -> str:
+    """Look up NAS shared secret from DB then config for CoA."""
+    c = (await db.execute(
+        select(NasClient).where(NasClient.ip_address == nas_ip, NasClient.enabled == True)
+    )).scalar_one_or_none()
+    if c:
+        return c.secret
+    cfg = get_config()
+    for client in cfg.radius.clients:
+        if client.address == nas_ip:
+            return client.secret
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -895,6 +971,24 @@ async def reveal_tacacs_key(
     if not c:
         return Response(content='{"detail":"Not found"}', status_code=404, media_type="application/json")
     return Response(content=_json.dumps({"key": c.key}), media_type="application/json")
+
+
+# ---------------------------------------------------------------------------
+# Command Sets
+# ---------------------------------------------------------------------------
+
+@app.get("/command-sets", response_class=HTMLResponse)
+async def command_sets_page(request: Request, db: AsyncSession = Depends(get_db)):
+    user = _require_auth(request)
+    from sqlalchemy.orm import selectinload
+    rows = (await db.execute(
+        select(CommandSet)
+        .options(selectinload(CommandSet.rules), selectinload(CommandSet.groups))
+        .order_by(CommandSet.name)
+    )).scalars().unique().all()
+    return templates.TemplateResponse(request, "command_sets.html", {
+        "request": request, "user": user, "command_sets": rows,
+    })
 
 
 # ---------------------------------------------------------------------------

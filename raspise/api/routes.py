@@ -59,6 +59,7 @@ from raspise.api.auth import (
 )
 from raspise.api.schemas import (
     ActiveSessionOut, AuthLogOut, DashboardStats,
+    CommandSetCreate, CommandSetOut, CommandSetUpdate,
     GroupCreate, GroupOut,
     GuestSessionCreate, GuestSessionOut,
     LoginRequest, PolicyCreate, PolicyOut, PolicyUpdate,
@@ -70,7 +71,8 @@ from raspise.config import get_config
 from raspise.db import get_db
 from raspise.db.models import (
     ActiveSession, AdminUser, AuthLog, AuthResult,
-    Device, Group, GuestSession, Policy, TacacsLog, User,
+    CommandRule, CommandSet,
+    Device, Group, GuestSession, NasClient, Policy, TacacsLog, User,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -227,7 +229,7 @@ async def create_group(
     existing = (await db.execute(select(Group).where(Group.name == body.name))).scalar_one_or_none()
     if existing:
         raise HTTPException(409, "Group name already exists")
-    grp = Group(name=body.name, description=body.description)
+    grp = Group(name=body.name, description=body.description, command_set_id=body.command_set_id)
     db.add(grp)
     await db.commit()
     await db.refresh(grp)
@@ -265,6 +267,7 @@ async def update_group(
             raise HTTPException(409, "Group name already exists")
     grp.name = body.name
     grp.description = body.description
+    grp.command_set_id = body.command_set_id
     await db.commit()
     await db.refresh(grp)
     return GroupOut.model_validate(grp)
@@ -464,9 +467,46 @@ async def terminate_session(
     sess = (await db.execute(select(ActiveSession).where(ActiveSession.id == session_id))).scalar_one_or_none()
     if not sess:
         raise HTTPException(404, "Session not found")
+
+    # Send RADIUS Disconnect-Request (RFC 5176) to the NAS
+    coa_msg = ""
+    if sess.nas_ip and sess.session_id:
+        nas_secret = await _get_nas_secret(sess.nas_ip, db)
+        if nas_secret:
+            from raspise.radius.coa import disconnect_session
+            result = await disconnect_session(
+                session_id=str(sess.id),
+                nas_ip=sess.nas_ip,
+                acct_session_id=sess.session_id,
+                username=sess.username,
+                nas_secret=nas_secret,
+            )
+            coa_msg = f" CoA: {result['message']}"
+        else:
+            coa_msg = " CoA: no shared secret for NAS — disconnect not sent"
+
     await db.delete(sess)
     await db.commit()
-    return StatusResponse(status="ok", message="Session removed (CoA not sent — remove from switch manually)")
+    return StatusResponse(status="ok", message=f"Session removed.{coa_msg}")
+
+
+# ---------------------------------------------------------------------------
+# NAS secret lookup for CoA
+# ---------------------------------------------------------------------------
+
+async def _get_nas_secret(nas_ip: str, db: AsyncSession) -> str:
+    """Look up the shared secret for a NAS IP from DB, then fall back to config."""
+    c = (await db.execute(
+        select(NasClient).where(NasClient.ip_address == nas_ip, NasClient.enabled == True)
+    )).scalar_one_or_none()
+    if c:
+        return c.secret
+    # Fall back to YAML-configured clients
+    cfg = get_config()
+    for client in cfg.radius.clients:
+        if client.address == nas_ip:
+            return client.secret
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +583,100 @@ async def dashboard_stats(
         auth_success_today=auth_success_today, auth_failure_today=auth_fail_today,
         guest_sessions_active=guest_active,
     )
+
+
+# ---------------------------------------------------------------------------
+# TACACS+ Command Sets
+# ---------------------------------------------------------------------------
+
+@router.get("/command-sets", response_model=list[CommandSetOut], tags=["Command Sets"])
+async def list_command_sets(
+    db: AsyncSession = Depends(get_db),
+    _:  AdminUser    = Depends(get_current_admin),
+):
+    stmt = select(CommandSet).options(selectinload(CommandSet.rules)).order_by(CommandSet.name)
+    rows = (await db.execute(stmt)).scalars().unique().all()
+    return [CommandSetOut.model_validate(r) for r in rows]
+
+
+@router.post("/command-sets", response_model=CommandSetOut, status_code=201, tags=["Command Sets"])
+async def create_command_set(
+    body: CommandSetCreate,
+    db:   AsyncSession = Depends(get_db),
+    _:    AdminUser    = Depends(get_current_admin),
+):
+    existing = (await db.execute(select(CommandSet).where(CommandSet.name == body.name))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, "Command set name already exists")
+    cs = CommandSet(name=body.name, description=body.description)
+    for r in body.rules:
+        cs.rules.append(CommandRule(
+            priority=r.priority, action=r.action,
+            command_pattern=r.command_pattern, args_pattern=r.args_pattern,
+        ))
+    db.add(cs)
+    await db.commit()
+    await db.refresh(cs, ["rules"])
+    return CommandSetOut.model_validate(cs)
+
+
+@router.get("/command-sets/{cs_id}", response_model=CommandSetOut, tags=["Command Sets"])
+async def get_command_set(
+    cs_id: int,
+    db: AsyncSession = Depends(get_db),
+    _:  AdminUser    = Depends(get_current_admin),
+):
+    stmt = select(CommandSet).options(selectinload(CommandSet.rules)).where(CommandSet.id == cs_id)
+    cs = (await db.execute(stmt)).scalar_one_or_none()
+    if not cs:
+        raise HTTPException(404, "Command set not found")
+    return CommandSetOut.model_validate(cs)
+
+
+@router.put("/command-sets/{cs_id}", response_model=CommandSetOut, tags=["Command Sets"])
+async def update_command_set(
+    cs_id: int,
+    body:  CommandSetUpdate,
+    db:    AsyncSession = Depends(get_db),
+    _:     AdminUser    = Depends(get_current_admin),
+):
+    stmt = select(CommandSet).options(selectinload(CommandSet.rules)).where(CommandSet.id == cs_id)
+    cs = (await db.execute(stmt)).scalar_one_or_none()
+    if not cs:
+        raise HTTPException(404, "Command set not found")
+    if body.name is not None:
+        if body.name != cs.name:
+            dup = (await db.execute(select(CommandSet).where(CommandSet.name == body.name))).scalar_one_or_none()
+            if dup:
+                raise HTTPException(409, "Command set name already exists")
+        cs.name = body.name
+    if body.description is not None:
+        cs.description = body.description
+    if body.rules is not None:
+        # Replace all rules
+        cs.rules.clear()
+        for r in body.rules:
+            cs.rules.append(CommandRule(
+                priority=r.priority, action=r.action,
+                command_pattern=r.command_pattern, args_pattern=r.args_pattern,
+            ))
+    await db.commit()
+    await db.refresh(cs, ["rules"])
+    return CommandSetOut.model_validate(cs)
+
+
+@router.delete("/command-sets/{cs_id}", response_model=StatusResponse, tags=["Command Sets"])
+async def delete_command_set(
+    cs_id: int,
+    db: AsyncSession = Depends(get_db),
+    _:  AdminUser    = Depends(get_current_admin),
+):
+    cs = (await db.execute(select(CommandSet).where(CommandSet.id == cs_id))).scalar_one_or_none()
+    if not cs:
+        raise HTTPException(404, "Command set not found")
+    await db.delete(cs)
+    await db.commit()
+    return StatusResponse(status="ok", message=f"Command set {cs_id} deleted")
 
 
 # ---------------------------------------------------------------------------

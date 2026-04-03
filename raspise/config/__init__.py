@@ -127,6 +127,19 @@ class LogForwardingConfig(BaseModel):
     graylog: LogGraylogConfig = Field(default_factory=LogGraylogConfig)
 
 
+class LdapConfig(BaseModel):
+    enabled: bool = False
+    server: str = "ldap://dc.example.com"
+    port: int = 389
+    use_ssl: bool = False
+    bind_dn: str = ""                  # e.g. "CN=svc-raspise,OU=Service Accounts,DC=example,DC=com"
+    bind_password: str = ""
+    base_dn: str = ""                  # e.g. "DC=example,DC=com"
+    user_filter: str = "(sAMAccountName={username})"
+    group_attribute: str = "memberOf"  # AD group membership attribute
+    group_map: dict[str, str] = {}     # LDAP group DN → RaspISE group name
+
+
 class DatabaseConfig(BaseModel):
     url: str = "sqlite+aiosqlite:////var/lib/raspise/raspise.db"
 
@@ -142,6 +155,7 @@ class AppConfig(BaseModel):
     profiler: ProfilerConfig = Field(default_factory=ProfilerConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     log_forwarding: LogForwardingConfig = Field(default_factory=LogForwardingConfig)
+    ldap: LdapConfig = Field(default_factory=LdapConfig)
 
 
 # ---------------------------------------------------------------------------

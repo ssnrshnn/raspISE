@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}Command Sets{% endblock %}
+{% block page_title %}TACACS+ Command Sets{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <span class="text-muted small">{{ command_sets|length }} command set(s) · Assign to groups for per-command TACACS+ authorization</span>
+  <button class="btn btn-info btn-sm" data-bs-toggle="modal" data-bs-target="#addCsModal">
+    <i class="bi bi-plus-circle me-1"></i>Add Command Set
+  </button>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 small align-middle">
+      <thead class="table-secondary">
+        <tr><th>Name</th><th>Description</th><th class="text-center">Rules</th><th>Groups</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for cs in command_sets %}
+        <tr>
+          <td class="fw-semibold font-monospace">{{ cs.name }}</td>
+          <td class="text-muted">{{ cs.description or '—' }}</td>
+          <td class="text-center"><span class="badge bg-secondary">{{ cs.rules|length }}</span></td>
+          <td>
+            {% for g in cs.groups %}
+              <span class="badge bg-dark border border-secondary me-1">{{ g.name }}</span>
+            {% else %}
+              <span class="text-muted">none</span>
+            {% endfor %}
+          </td>
+          <td class="text-end">
+            <button class="btn btn-sm btn-outline-info me-1"
+                    onclick="editCs({{ cs.id }}, {{ cs|tojson }})">
+              <i class="bi bi-pencil"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-danger"
+                    onclick="deleteCs({{ cs.id }}, '{{ cs.name }}')">
+              <i class="bi bi-trash"></i>
+            </button>
+          </td>
+        </tr>
+        <!-- Expandable rules sub-row -->
+        {% if cs.rules %}
+        <tr class="table-dark">
+          <td colspan="5" class="p-0">
+            <table class="table table-sm mb-0 ms-4" style="max-width: 90%">
+              <thead><tr class="text-muted small"><th>#</th><th>Action</th><th>Command Pattern</th><th>Args Pattern</th></tr></thead>
+              <tbody>
+                {% for r in cs.rules|sort(attribute='priority') %}
+                <tr>
+                  <td><span class="badge bg-secondary">{{ r.priority }}</span></td>
+                  <td>
+                    {% if r.action.value == 'PERMIT' or r.action == 'PERMIT' %}
+                      <span class="badge bg-success">✓ Permit</span>
+                    {% else %}
+                      <span class="badge bg-danger">✗ Deny</span>
+                    {% endif %}
+                  </td>
+                  <td class="font-monospace">{{ r.command_pattern }}</td>
+                  <td class="font-monospace text-muted">{{ r.args_pattern or '—' }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </td>
+        </tr>
+        {% endif %}
+        {% else %}
+        <tr><td colspan="5" class="text-center text-muted py-4">No command sets defined. TACACS+ authorization will use the policy engine defaults.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="alert alert-info-subtle border border-info-subtle mt-3 small">
+  <i class="bi bi-info-circle me-2"></i>
+  Rules are evaluated in <strong>priority order</strong> (lowest first). First matching rule wins. If no rule matches, access is <strong>denied</strong>.
+  Use <code>*</code> as a wildcard in patterns (e.g. <code>show *</code>, <code>configure *</code>).
+</div>
+
+<!-- Add / Edit Command Set Modal -->
+<div class="modal fade" id="addCsModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="csModalTitle">Add Command Set</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="cs_id" value="">
+        <div class="row g-3 mb-3">
+          <div class="col-md-5">
+            <label class="form-label">Name *</label>
+            <input type="text" class="form-control" id="cs_name" required placeholder="read-only">
+          </div>
+          <div class="col-md-7">
+            <label class="form-label">Description</label>
+            <input type="text" class="form-control" id="cs_desc" placeholder="Optional description">
+          </div>
+        </div>
+        <hr class="border-secondary">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="fw-semibold small">Rules <span class="text-muted fw-normal">(first match wins)</span></span>
+          <button class="btn btn-sm btn-outline-info" onclick="addRuleRow()">
+            <i class="bi bi-plus-circle me-1"></i>Add Rule
+          </button>
+        </div>
+        <div id="ruleRows"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-info" onclick="saveCs()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let ruleIdx = 0;
+
+function addRuleRow(priority, action, cmdPattern, argsPattern) {
+  priority   = priority   || 100;
+  action     = action     || 'PERMIT';
+  cmdPattern = cmdPattern || '';
+  argsPattern = argsPattern || '';
+  const idx = ruleIdx++;
+  const row = document.createElement('div');
+  row.className = 'rule-row border border-secondary rounded p-2 mb-2';
+  row.dataset.idx = idx;
+  row.innerHTML = `
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <input type="number" class="form-control form-control-sm" style="width:80px"
+             data-field="priority" value="${priority}" min="1" max="9999" placeholder="#">
+      <select class="form-select form-select-sm" style="width:110px" data-field="action">
+        <option value="PERMIT" ${action==='PERMIT'?'selected':''}>✓ Permit</option>
+        <option value="DENY"   ${action==='DENY'?'selected':''}>✗ Deny</option>
+      </select>
+      <input type="text" class="form-control form-control-sm" style="min-width:180px;flex:1"
+             data-field="command_pattern" value="${cmdPattern.replace(/"/g,'&quot;')}"
+             placeholder="show *" required>
+      <input type="text" class="form-control form-control-sm" style="min-width:140px;flex:0.6"
+             data-field="args_pattern" value="${argsPattern.replace(/"/g,'&quot;')}"
+             placeholder="args pattern (optional)">
+      <button class="btn btn-sm btn-outline-danger" onclick="this.closest('.rule-row').remove()">
+        <i class="bi bi-trash"></i>
+      </button>
+    </div>`;
+  document.getElementById('ruleRows').appendChild(row);
+}
+
+function collectRules() {
+  const rules = [];
+  for (const row of document.querySelectorAll('.rule-row')) {
+    const get = f => row.querySelector(`[data-field="${f}"]`).value.trim();
+    const cp = get('command_pattern');
+    if (!cp) { alert('Command pattern cannot be empty'); return null; }
+    rules.push({
+      priority:        parseInt(get('priority')) || 100,
+      action:          get('action'),
+      command_pattern: cp,
+      args_pattern:    get('args_pattern'),
+    });
+  }
+  return rules;
+}
+
+async function saveCs() {
+  const id   = document.getElementById('cs_id').value;
+  const name = document.getElementById('cs_name').value.trim();
+  if (!name) { alert('Name is required'); return; }
+  const rules = collectRules();
+  if (rules === null) return;
+  const body = { name, description: document.getElementById('cs_desc').value.trim(), rules };
+  const url    = id ? `/api/v1/command-sets/${id}` : '/api/v1/command-sets';
+  const method = id ? 'PUT' : 'POST';
+  const r = await fetch(url, {
+    method, headers: {'Content-Type': 'application/json', 'X-CSRF-Token': window.CSRF_TOKEN},
+    body: JSON.stringify(body),
+  });
+  if (r.ok) location.reload();
+  else {
+    const err = await r.json().catch(() => ({}));
+    alert('Error: ' + (err.detail || r.status));
+  }
+}
+
+async function deleteCs(id, name) {
+  if (!confirm('Delete command set "' + name + '"?')) return;
+  const r = await fetch('/api/v1/command-sets/' + id, {
+    method: 'DELETE', headers: {'X-CSRF-Token': window.CSRF_TOKEN}
+  });
+  if (r.ok) location.reload();
+}
+
+function editCs(id, cs) {
+  document.getElementById('csModalTitle').textContent = 'Edit Command Set';
+  document.getElementById('cs_id').value = id;
+  document.getElementById('cs_name').value = cs.name;
+  document.getElementById('cs_desc').value = cs.description || '';
+  document.getElementById('ruleRows').innerHTML = '';
+  ruleIdx = 0;
+  if (cs.rules) {
+    for (const r of cs.rules.sort((a,b) => a.priority - b.priority)) {
+      const action = r.action && r.action.value ? r.action.value : r.action;
+      addRuleRow(r.priority, action, r.command_pattern, r.args_pattern);
+    }
+  }
+  new bootstrap.Modal(document.getElementById('addCsModal')).show();
+}
+
+// Reset on fresh open
+document.getElementById('addCsModal').addEventListener('show.bs.modal', function(e) {
+  if (e.relatedTarget) {  // only reset when opened via button click, not editCs()
+    document.getElementById('csModalTitle').textContent = 'Add Command Set';
+    document.getElementById('cs_id').value = '';
+    document.getElementById('cs_name').value = '';
+    document.getElementById('cs_desc').value = '';
+    document.getElementById('ruleRows').innerHTML = '';
+    ruleIdx = 0;
+  }
+});
+</script>
+{% endblock %}

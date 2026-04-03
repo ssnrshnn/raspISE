@@ -26,6 +26,7 @@
   <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-portal">Guest Portal</a></li>
   <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-display">Display</a></li>
   <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-logfwd">Log Forwarding</a></li>
+  <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-ldap">LDAP / AD</a></li>
 </ul>
 
 <div class="tab-content">
@@ -408,6 +409,86 @@
     </div><!-- /row -->
   </div><!-- /tab-logfwd -->
 
+  <!-- ── LDAP / Active Directory ── -->
+  <div class="tab-pane fade" id="tab-ldap">
+    <div class="card" style="max-width:640px">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-building me-2"></i>LDAP / Active Directory</span>
+        <button class="btn btn-sm btn-outline-secondary" id="ldapTestBtn">
+          <i class="bi bi-send me-1"></i>Test Connection
+        </button>
+      </div>
+      <form method="post" action="/settings/save">
+        <input type="hidden" name="section" value="ldap">
+        <div class="card-body">
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" name="enabled" id="ldapEnabled"
+                   {{ 'checked' if cfg.ldap.enabled }}>
+            <label class="form-check-label" for="ldapEnabled">Enable LDAP/AD authentication</label>
+            <div class="form-text">When enabled, users not found locally are authenticated against LDAP/AD.</div>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-md-8">
+              <label class="form-label">Server URI</label>
+              <input type="text" name="server" class="form-control bg-dark border-secondary text-light"
+                     value="{{ cfg.ldap.server }}" placeholder="ldap://dc.example.com">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label">Port</label>
+              <input type="number" name="port" class="form-control bg-dark border-secondary text-light"
+                     value="{{ cfg.ldap.port }}">
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" name="use_ssl" id="ldapSsl"
+                       {{ 'checked' if cfg.ldap.use_ssl }}>
+                <label class="form-check-label" for="ldapSsl">SSL</label>
+              </div>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Bind DN</label>
+            <input type="text" name="bind_dn" class="form-control bg-dark border-secondary text-light font-monospace small"
+                   value="{{ cfg.ldap.bind_dn }}" placeholder="CN=svc-raspise,OU=Service Accounts,DC=example,DC=com">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Bind Password</label>
+            <input type="password" name="bind_password" class="form-control bg-dark border-secondary text-light"
+                   value="{{ cfg.ldap.bind_password }}">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Base DN</label>
+            <input type="text" name="base_dn" class="form-control bg-dark border-secondary text-light font-monospace small"
+                   value="{{ cfg.ldap.base_dn }}" placeholder="DC=example,DC=com">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">User Filter</label>
+            <input type="text" name="user_filter" class="form-control bg-dark border-secondary text-light font-monospace small"
+                   value="{{ cfg.ldap.user_filter }}" placeholder="(sAMAccountName={username})">
+            <div class="form-text"><code>{username}</code> is replaced at runtime with the login name.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Group Attribute</label>
+            <input type="text" name="group_attribute" class="form-control bg-dark border-secondary text-light"
+                   value="{{ cfg.ldap.group_attribute }}" placeholder="memberOf">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Group Mapping <span class="text-muted small">(one per line: <code>LDAP DN = RaspISE group</code>)</span></label>
+            <textarea name="group_map_raw" rows="4"
+                      class="form-control bg-dark border-secondary text-light font-monospace small"
+                      placeholder="CN=NetworkAdmins,OU=Groups,DC=example,DC=com = admins">{% for k, v in cfg.ldap.group_map.items() %}{{ k }} = {{ v }}
+{% endfor %}</textarea>
+            <div class="form-text">Maps AD group DNs to local RaspISE group names for auto-provisioning.</div>
+          </div>
+          <span class="text-muted small" id="ldap-result"></span>
+        </div>
+        <div class="card-footer border-secondary">
+          <button type="submit" class="btn btn-sm btn-info">Save LDAP Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
 </div>
 {% endblock %}
 
@@ -441,6 +522,33 @@ document.querySelectorAll('.test-btn').forEach(btn => {
       btn.innerHTML = '<i class="bi bi-send me-1"></i>Test';
     }
   });
+});
+// LDAP test button
+document.getElementById('ldapTestBtn')?.addEventListener('click', async (e) => {
+  e.preventDefault();
+  const btn = e.currentTarget;
+  const resultEl = document.getElementById('ldap-result');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  try {
+    const resp = await fetch('/settings/test-ldap', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': window.CSRF_TOKEN || '' }
+    });
+    const data = await resp.json();
+    if (resultEl) {
+      resultEl.className = 'small ' + (data.ok ? 'text-success' : 'text-danger');
+      resultEl.textContent = data.message;
+    }
+  } catch (err) {
+    if (resultEl) {
+      resultEl.className = 'small text-danger';
+      resultEl.textContent = 'Request failed: ' + err;
+    }
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-send me-1"></i>Test Connection';
+  }
 });
 </script>
 {% endblock %}

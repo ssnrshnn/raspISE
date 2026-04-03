@@ -20,6 +20,7 @@
         <tr>
           <th>Name</th>
           <th>Description</th>
+          <th>Command Set</th>
           <th class="text-center">Users</th>
           <th>Created</th>
           <th class="text-end">Actions</th>
@@ -30,6 +31,13 @@
         <tr>
           <td class="font-monospace fw-semibold">{{ g.name }}</td>
           <td class="text-muted small">{{ g.description or '—' }}</td>
+          <td>
+            {% if g.command_set %}
+              <span class="badge bg-info-subtle text-info border border-info-subtle">{{ g.command_set.name }}</span>
+            {% else %}
+              <span class="text-muted small">—</span>
+            {% endif %}
+          </td>
           <td class="text-center">
             <span class="badge bg-secondary">{{ counts[g.id] }}</span>
           </td>
@@ -46,7 +54,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="5" class="text-center text-muted py-4">No groups yet.</td></tr>
+        <tr><td colspan="6" class="text-center text-muted py-4">No groups yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -72,6 +80,16 @@
             <label class="form-label">Description</label>
             <input type="text" name="description" class="form-control bg-dark border-secondary text-light"
                    placeholder="Optional description">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Command Set</label>
+            <select name="command_set_id" class="form-select bg-dark border-secondary text-light">
+              <option value="">— None —</option>
+              {% for cs in command_sets %}
+              <option value="{{ cs.id }}">{{ cs.name }}</option>
+              {% endfor %}
+            </select>
+            <div class="form-text">TACACS+ command authorization rules for this group</div>
           </div>
         </div>
         <div class="modal-footer border-secondary">

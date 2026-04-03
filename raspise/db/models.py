@@ -63,12 +63,16 @@ class Group(Base):
     id: Mapped[int]           = mapped_column(Integer, primary_key=True)
     name: Mapped[str]         = mapped_column(String(64), unique=True, nullable=False)
     description: Mapped[str]  = mapped_column(String(255), default="")
+    command_set_id: Mapped[int | None] = mapped_column(
+        ForeignKey("command_sets.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
 
     users: Mapped[list["User"]] = relationship("User", back_populates="group")
     policies: Mapped[list["Policy"]] = relationship("Policy", back_populates="group")
+    command_set: Mapped["CommandSet | None"] = relationship("CommandSet", back_populates="groups")
 
 
 class User(Base):
@@ -326,3 +330,51 @@ class VlanMapping(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
+
+
+# ---------------------------------------------------------------------------
+# TACACS+ Command Sets
+# ---------------------------------------------------------------------------
+
+class CommandRuleAction(str, PyEnum):
+    PERMIT = "PERMIT"
+    DENY   = "DENY"
+
+
+class CommandSet(Base):
+    __tablename__ = "command_sets"
+
+    id: Mapped[int]           = mapped_column(Integer, primary_key=True)
+    name: Mapped[str]         = mapped_column(String(64), unique=True, nullable=False)
+    description: Mapped[str]  = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+
+    rules: Mapped[list["CommandRule"]] = relationship(
+        "CommandRule", back_populates="command_set",
+        cascade="all, delete-orphan", order_by="CommandRule.priority",
+    )
+    groups: Mapped[list["Group"]] = relationship("Group", back_populates="command_set")
+
+
+class CommandRule(Base):
+    """A single permit/deny rule within a CommandSet.
+
+    Rules are evaluated in priority order (ascending). First match wins.
+    If no rule matches, the default action is DENY.
+
+    command_pattern: glob-like pattern matched against the command, e.g.
+                     "show *", "configure terminal", "interface *"
+    args_pattern:    optional pattern for command arguments (empty = match any)
+    """
+    __tablename__ = "command_rules"
+
+    id: Mapped[int]              = mapped_column(Integer, primary_key=True)
+    command_set_id: Mapped[int]  = mapped_column(ForeignKey("command_sets.id", ondelete="CASCADE"), nullable=False)
+    priority: Mapped[int]        = mapped_column(Integer, default=100)
+    action: Mapped[str]          = mapped_column(Enum(CommandRuleAction), default=CommandRuleAction.PERMIT)
+    command_pattern: Mapped[str] = mapped_column(String(256), nullable=False)
+    args_pattern: Mapped[str]    = mapped_column(String(256), default="")
+
+    command_set: Mapped["CommandSet"] = relationship("CommandSet", back_populates="rules")
