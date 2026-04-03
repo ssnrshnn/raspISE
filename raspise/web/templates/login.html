@@ -50,11 +50,22 @@
         <label class="form-label small text-muted">Username</label>
         <input type="text" name="username" class="form-control" autofocus required autocomplete="username">
       </div>
-      <div class="mb-4">
+      <div class="mb-3">
         <label class="form-label small text-muted">Password</label>
         <input type="password" name="password" class="form-control" required autocomplete="current-password">
       </div>
+      <div class="mb-4" id="totp-group" style="{% if not totp_required %}display:none{% endif %}">
+        <label class="form-label small text-muted">Authenticator Code</label>
+        <input type="text" name="totp_code" class="form-control" inputmode="numeric" pattern="[0-9]{6}"
+               maxlength="6" autocomplete="one-time-code" placeholder="6-digit code">
+      </div>
       <button type="submit" class="btn btn-info w-100 fw-semibold">Sign In</button>
+      <div class="text-center mt-2">
+        <a href="#" class="text-muted small" id="show-totp" style="{% if totp_required %}display:none{% endif %}"
+           onclick="document.getElementById('totp-group').style.display='block';this.style.display='none';return false;">
+          Have a 2FA code?
+        </a>
+      </div>
     </form>
 
     <p class="text-center text-muted mt-3" style="font-size:.75rem">

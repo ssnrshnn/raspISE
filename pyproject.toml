@@ -20,9 +20,15 @@ classifiers = [
 ]
 
 [project.scripts]
-raspise        = "raspise.main:main"
+raspise         = "raspise.main:main"
 raspise-display = "raspise.display_main:main"
+raspise-cli     = "raspise.cli:cli"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["raspise*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

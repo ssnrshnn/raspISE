@@ -30,6 +30,11 @@ class RadiusConfig(BaseModel):
     default_vlan: int = 10
     guest_vlan: int = 20
     reject_vlan: int = 99
+    # EAP-TLS certificate auth
+    eap_tls_enabled: bool = False
+    ca_cert: str = "/etc/raspise/certs/ca.pem"
+    server_cert: str = "/etc/raspise/certs/server.pem"
+    server_key: str = "/etc/raspise/certs/server.key"
 
 
 class TacacsClientConfig(BaseModel):
@@ -140,6 +145,13 @@ class LdapConfig(BaseModel):
     group_map: dict[str, str] = {}     # LDAP group DN → RaspISE group name
 
 
+class EventWebhookTarget(BaseModel):
+    url: str
+    events: list[str] = []              # empty = all events
+    headers: dict[str, str] = {}        # e.g. {"Authorization": "Bearer xxx"}
+    timeout: float = 5.0
+
+
 class DatabaseConfig(BaseModel):
     url: str = "sqlite+aiosqlite:////var/lib/raspise/raspise.db"
 
@@ -156,6 +168,7 @@ class AppConfig(BaseModel):
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     log_forwarding: LogForwardingConfig = Field(default_factory=LogForwardingConfig)
     ldap: LdapConfig = Field(default_factory=LdapConfig)
+    event_webhooks: list[EventWebhookTarget] = []
 
 
 # ---------------------------------------------------------------------------

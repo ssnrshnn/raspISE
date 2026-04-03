@@ -1,0 +1,36 @@
+# Minimal config for test suite — in-memory DB, all services disabled.
+server:
+  name: "RaspISE-Test"
+  secret_key: "test-secret-key-not-for-production"
+  debug: false
+  log_level: "WARNING"
+  log_file: "/dev/null"
+
+database:
+  url: "sqlite+aiosqlite://"
+
+radius:
+  enabled: false
+
+tacacs:
+  enabled: false
+  key: "testkey"
+
+web:
+  port: 8080
+  admin_username: "admin"
+  admin_password: "Admin1234"
+
+api:
+  port: 8081
+  token_expire_minutes: 60
+
+portal:
+  enabled: false
+
+profiler:
+  enabled: false
+
+display:
+  enabled: false
+  driver: "simulation"

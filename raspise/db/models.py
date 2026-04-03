@@ -274,6 +274,7 @@ class AdminUser(Base):
     email: Mapped[str]          = mapped_column(String(128), default="")
     is_superuser: Mapped[bool]  = mapped_column(Boolean, default=False)
     enabled: Mapped[bool]       = mapped_column(Boolean, default=True)
+    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
@@ -378,3 +379,21 @@ class CommandRule(Base):
     args_pattern: Mapped[str]    = mapped_column(String(256), default="")
 
     command_set: Mapped["CommandSet"] = relationship("CommandSet", back_populates="rules")
+
+
+# ---------------------------------------------------------------------------
+# Admin Audit Log (tracks changes made via Web UI and REST API)
+# ---------------------------------------------------------------------------
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_logs"
+
+    id: Mapped[int]              = mapped_column(Integer, primary_key=True)
+    timestamp: Mapped[datetime]  = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), index=True
+    )
+    admin_username: Mapped[str]  = mapped_column(String(64), nullable=False, index=True)
+    action: Mapped[str]          = mapped_column(String(32), nullable=False)  # CREATE, UPDATE, DELETE, LOGIN
+    resource_type: Mapped[str]   = mapped_column(String(64), nullable=False)  # user, policy, device, ...
+    resource_id: Mapped[str]     = mapped_column(String(64), default="")
+    detail: Mapped[str]          = mapped_column(Text, default="")

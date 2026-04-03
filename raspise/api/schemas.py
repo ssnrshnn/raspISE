@@ -4,9 +4,20 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from raspise.db.models import AuthMethod, AuthResult, CommandRuleAction, PolicyAction
+
+
+def _validate_password_complexity(password: str) -> str:
+    """Enforce minimum password complexity: 8+ chars, at least one letter and one digit."""
+    if len(password) < 8:
+        raise ValueError("Password must be at least 8 characters")
+    if not any(c.isalpha() for c in password):
+        raise ValueError("Password must contain at least one letter")
+    if not any(c.isdigit() for c in password):
+        raise ValueError("Password must contain at least one digit")
+    return password
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +42,7 @@ class TokenResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=1)
+    totp_code: str | None = Field(None, min_length=6, max_length=6)
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +57,11 @@ class UserCreate(BaseModel):
     group_id: int | None = None
     enabled:  bool = True
 
+    @field_validator("password")
+    @classmethod
+    def check_password_complexity(cls, v):
+        return _validate_password_complexity(v)
+
 
 class UserUpdate(BaseModel):
     email:     str | None = Field(None, max_length=128)
@@ -52,6 +69,13 @@ class UserUpdate(BaseModel):
     group_id:  int | None = None
     enabled:   bool | None = None
     password:  str | None = Field(None, min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def check_password_complexity(cls, v):
+        if v is not None:
+            return _validate_password_complexity(v)
+        return v
 
 
 class UserOut(BaseModel):
@@ -129,6 +153,31 @@ class PolicyCreate(BaseModel):
     group_id:    int | None = None
     enabled:     bool = True
 
+    @field_validator("conditions")
+    @classmethod
+    def validate_conditions(cls, v):
+        import re
+        _VALID_TYPES = {"username", "group", "mac", "time", "device_type", "nas_ip", "always"}
+        _VALID_OPS = {"equals", "startswith", "endswith", "contains", "regex", "in", "between"}
+        for cond in v:
+            ctype = cond.get("type", "")
+            if ctype not in _VALID_TYPES:
+                raise ValueError(f"Unknown condition type: {ctype!r}. Must be one of: {', '.join(sorted(_VALID_TYPES))}")
+            op = cond.get("op", "equals")
+            if ctype != "always" and op not in _VALID_OPS:
+                raise ValueError(f"Unknown operator: {op!r}. Must be one of: {', '.join(sorted(_VALID_OPS))}")
+            # Validate regex patterns compile and aren't too long
+            if op == "regex":
+                pattern = cond.get("value", "")
+                if isinstance(pattern, str):
+                    if len(pattern) > 256:
+                        raise ValueError(f"Regex pattern too long ({len(pattern)} chars, max 256)")
+                    try:
+                        re.compile(pattern)
+                    except re.error as exc:
+                        raise ValueError(f"Invalid regex pattern: {exc}")
+        return v
+
 
 class PolicyUpdate(BaseModel):
     name:        str | None = Field(None, min_length=1, max_length=128)
@@ -139,6 +188,13 @@ class PolicyUpdate(BaseModel):
     vlan:        int | None = None
     group_id:    int | None = None
     enabled:     bool | None = None
+
+    @field_validator("conditions")
+    @classmethod
+    def validate_conditions(cls, v):
+        if v is not None:
+            return PolicyCreate.validate_conditions(v)
+        return v
 
 
 class PolicyOut(BaseModel):

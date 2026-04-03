@@ -6,7 +6,9 @@ Pure-Python RADIUS implementation built on pyrad.
 Supported authentication methods
 ---------------------------------
   PAP       — User-Password attribute (reversibly encrypted with shared secret)
-  CHAP      — CHAP-Password + CHAP-Challenge
+  CHAP      — CHAP-Password + CHAP-Challenge (requires cleartext/NT-hash storage;
+              only bcrypt hashes are stored by default, so CHAP will fail unless
+              extended — use PAP or EAP-PEAP with FreeRADIUS instead)
   MAB       — MAC Address Bypass: MAC used as both username and password
   EAP-PEAP  — Outer TLS tunnel + inner MSCHAPv2 (requires FreeRADIUS helper
                configured via setup_freeradius.sh; this server proxies correctly)
@@ -50,6 +52,9 @@ log = get_logger(__name__)
 
 # Path to the bundled RADIUS dictionary
 _DICT_PATH = os.path.join(os.path.dirname(__file__), "dictionary")
+
+# Module-level reference for graceful shutdown from main.py
+_active_radius_server: "RaspISERadiusServer | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +165,21 @@ class RaspISERadiusServer(pyrad.server.Server):
             else:
                 reply = pkt.CreateReply(code=pyrad.packet.AccessReject)
                 log.info("Access-REJECT user=%r nas=%s reason=%r", username, nas_ip, reason)
+
+            # Attach EAP-Message / State attrs for EAP exchanges
+            eap_chunks = getattr(pkt, "_eap_reply_chunks", None)
+            if eap_chunks:
+                for chunk in eap_chunks:
+                    try:
+                        reply.AddAttribute("EAP-Message", chunk)
+                    except Exception:
+                        pass
+            eap_state = getattr(pkt, "_eap_new_state", None)
+            if eap_state is not None:
+                try:
+                    reply.AddAttribute("State", eap_state)
+                except Exception:
+                    pass
 
             self.SendReplyPacket(pkt.fd, reply)
             self._log_auth(pkt, username, method, result, reason, policy_name, policy_vlan)
@@ -275,15 +295,58 @@ class RaspISERadiusServer(pyrad.server.Server):
         self, username: str, pkt: pyrad.packet.AuthPacket
     ) -> tuple[AuthMethod, str, AuthResult, str]:
         """
-        Full EAP-PEAP / EAP-TLS negotiation requires FreeRADIUS.
-        This handler logs the attempt and returns a challenge so the NAS
-        re-sends to FreeRADIUS (configured as a proxy) or rejects gracefully.
+        EAP-TLS certificate-based authentication.
+
+        When ``radius.eap_tls_enabled`` is ``True`` and the required CA /
+        server cert / key files exist, the server drives a full TLS
+        handshake via memory BIOs.  Otherwise, it rejects gracefully and
+        advises configuring FreeRADIUS for PEAP.
         """
-        log.warning(
-            "EAP request received for user=%r — configure FreeRADIUS proxy for EAP support",
-            username,
+        cfg = get_config().radius
+
+        # Check if EAP-TLS is configured and cert files exist
+        if not cfg.eap_tls_enabled:
+            log.warning(
+                "EAP request for user=%r — EAP-TLS not enabled; "
+                "set radius.eap_tls_enabled: true or use FreeRADIUS proxy",
+                username,
+            )
+            return AuthMethod.PEAP, username, AuthResult.FAILURE, "EAP requires FreeRADIUS proxy or EAP-TLS config"
+
+        import os
+        for path_label, path_val in [("ca_cert", cfg.ca_cert), ("server_cert", cfg.server_cert), ("server_key", cfg.server_key)]:
+            if not os.path.isfile(path_val):
+                log.error("EAP-TLS: %s file not found: %s", path_label, path_val)
+                return AuthMethod.EAP_TLS, username, AuthResult.FAILURE, f"EAP-TLS {path_label} not found"
+
+        from raspise.radius.eap_tls import handle_eap_tls
+
+        eap_messages = pkt.get("EAP-Message", [])
+        if isinstance(eap_messages, list):
+            eap_messages = [m if isinstance(m, bytes) else m.encode() for m in eap_messages]
+        state_attr = pkt.get("State", [None])[0]
+        if isinstance(state_attr, str):
+            state_attr = state_attr.encode()
+
+        nas_ip = pkt.source[0]
+        action, eap_chunks, new_state, peer_cn = handle_eap_tls(
+            nas_ip, username, eap_messages, state_attr,
+            cfg.ca_cert, cfg.server_cert, cfg.server_key,
         )
-        return AuthMethod.PEAP, username, AuthResult.FAILURE, "EAP requires FreeRADIUS proxy"
+
+        # Store EAP reply data on the packet for HandleAuthPacket to use
+        pkt._eap_reply_chunks = eap_chunks
+        pkt._eap_new_state = new_state
+        pkt._eap_peer_cn = peer_cn
+
+        if action == "accept":
+            # Use the CN from the client cert as the effective username
+            effective_user = peer_cn or username
+            return AuthMethod.EAP_TLS, effective_user, AuthResult.SUCCESS, ""
+        elif action == "challenge":
+            return AuthMethod.EAP_TLS, username, AuthResult.CHALLENGE, ""
+        else:
+            return AuthMethod.EAP_TLS, username, AuthResult.FAILURE, "EAP-TLS handshake failed"
 
     # ---- DB helpers (run from sync context via _run_sync) ----
 
@@ -338,10 +401,18 @@ class RaspISERadiusServer(pyrad.server.Server):
                     mac = normalise_mac(mac_raw)
                 except ValueError:
                     mac = mac_raw
+                vlan_raw = pkt.get("Tunnel-Private-Group-Id", [None])
+                vlan = None
+                if vlan_raw:
+                    try:
+                        vlan = int(str(vlan_raw[0]).lstrip("0x") if vlan_raw[0] else 0)
+                    except (ValueError, TypeError):
+                        pass
                 sess = ActiveSession(
                     session_id=session_id, username=username,
                     mac_address=mac, ip_address=ip,
                     nas_ip=nas_ip, nas_port=nas_port,
+                    vlan=vlan,
                 )
                 db.add(sess)
             elif status in (2, "Stop"):
@@ -510,9 +581,6 @@ def _decode_pap_password(encrypted: bytes, secret: bytes, authenticator: bytes) 
     return result.rstrip(b"\x00").decode("utf-8", errors="replace")
 
 
-from typing import Any
-
-
 # ---------------------------------------------------------------------------
 # DB helper for NAS client loading
 # ---------------------------------------------------------------------------
@@ -532,9 +600,11 @@ async def _load_db_nas_clients() -> list[tuple[str, str]]:
 
 def run_radius_server(loop: asyncio.AbstractEventLoop) -> None:
     """Start the RADIUS server in the calling thread (blocking)."""
+    global _active_radius_server
     cfg = get_config().radius
     server = RaspISERadiusServer()
     server._loop = loop
+    _active_radius_server = server
 
     # Merge NAS clients from the DB into the server (on top of YAML clients)
     try:

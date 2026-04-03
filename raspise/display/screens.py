@@ -20,13 +20,29 @@ from raspise.display.manager import (
     BaseScreen, C, FONT_SM, FONT_MD, FONT_LG, FONT_XL, W, H
 )
 
-# Sync DB helper — runs a coroutine from a non-async thread
+# Sync DB helper — runs a coroutine from a non-async thread.
+# Reuse a single event loop instead of creating one per query.
+_display_loop = None
+_display_loop_thread = None
+
+
+def _ensure_display_loop():
+    global _display_loop, _display_loop_thread
+    if _display_loop is None or _display_loop.is_closed():
+        _display_loop = asyncio.new_event_loop()
+        import threading
+        _display_loop_thread = threading.Thread(
+            target=_display_loop.run_forever,
+            daemon=True,
+            name="display-db-loop",
+        )
+        _display_loop_thread.start()
+
+
 def _sync_run(coro):
-    try:
-        loop = asyncio.new_event_loop()
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    _ensure_display_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, _display_loop)
+    return future.result(timeout=5)
 
 
 async def _fetch_recent_auth(limit: int = 8):

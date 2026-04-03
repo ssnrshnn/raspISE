@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import uvicorn
 
@@ -34,6 +34,7 @@ log = get_logger(__name__)
 # Guard so background services (RADIUS, TACACS+, profiler) start exactly once
 # even though _lifespan is shared across 3 concurrent uvicorn apps.
 _services_started = False
+_services_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +139,7 @@ async def _log_retention_loop() -> None:
 
     while True:
         try:
-            cutoff = datetime.utcnow() - timedelta(days=_LOG_RETENTION_DAYS)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=_LOG_RETENTION_DAYS)
             async with AsyncSessionLocal() as db:
                 r1 = await db.execute(
                     sa_delete(AuthLog).where(AuthLog.timestamp < cutoff)
@@ -153,6 +154,32 @@ async def _log_retention_loop() -> None:
         except Exception as exc:
             log.warning("Log retention cleanup failed: %s", exc)
         await asyncio.sleep(_LOG_CLEANUP_INTERVAL)
+
+
+_STALE_SESSION_HOURS = 24
+_STALE_SESSION_INTERVAL = 1800  # check every 30 minutes
+
+
+async def _stale_session_cleanup_loop() -> None:
+    """Remove active sessions that haven't been updated in >24 hours (NAS crash/unreachable)."""
+    from sqlalchemy import delete as sa_delete
+    from raspise.db.database import AsyncSessionLocal
+    from raspise.db.models import ActiveSession
+
+    while True:
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=_STALE_SESSION_HOURS)
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    sa_delete(ActiveSession).where(ActiveSession.updated_at < cutoff)
+                )
+                await db.commit()
+                if result.rowcount:
+                    log.info("Stale session cleanup: removed %d sessions (>%dh without update)",
+                             result.rowcount, _STALE_SESSION_HOURS)
+        except Exception as exc:
+            log.warning("Stale session cleanup failed: %s", exc)
+        await asyncio.sleep(_STALE_SESSION_INTERVAL)
 
 
 @asynccontextmanager
@@ -190,16 +217,34 @@ async def _lifespan(_app):
             "╚════════════════════════════════════════════════════════════╝"
         )
 
+    # Warn if using default admin credentials
+    _DEFAULT_PASSWORDS = {"RaspISE@admin1", "admin", "password", ""}
+    if cfg.web.admin_password in _DEFAULT_PASSWORDS:
+        log.warning("╔════════════════════════════════════════════════════════════╗")
+        log.warning("║  WARNING: admin password is set to the default value!     ║")
+        log.warning("║  Change it in config.yaml → web.admin_password            ║")
+        log.warning("╚════════════════════════════════════════════════════════════╝")
+
+    # Warn if using default TACACS+ key
+    if cfg.tacacs.enabled and cfg.tacacs.key in ("tacacs_secret", "testing123", ""):
+        log.warning("╔════════════════════════════════════════════════════════════╗")
+        log.warning("║  WARNING: TACACS+ key is set to the default value!        ║")
+        log.warning("║  Change it in config.yaml → tacacs.key                    ║")
+        log.warning("╚════════════════════════════════════════════════════════════╝")
+
     await init_db()
     await _seed_database()
 
-    if not _services_started:
-        _services_started = True
+    with _services_lock:
+        _should_start = not _services_started
+        if _should_start:
+            _services_started = True
 
+    if _should_start:
         # TACACS+
         if cfg.tacacs.enabled:
             from raspise.tacacs import run_tacacs_server
-            asyncio.ensure_future(run_tacacs_server())
+            asyncio.create_task(run_tacacs_server())
 
         # RADIUS (blocking UDP server — needs its own thread)
         _start_radius_thread(loop)
@@ -209,10 +254,21 @@ async def _lifespan(_app):
 
         # Guest session expiry cleanup
         from raspise.portal.app import expire_guest_sessions_loop
-        asyncio.ensure_future(expire_guest_sessions_loop())
+        asyncio.create_task(expire_guest_sessions_loop())
 
         # Log retention cleanup (prune old auth_logs and tacacs_logs)
-        asyncio.ensure_future(_log_retention_loop())
+        asyncio.create_task(_log_retention_loop())
+
+        # Stale session cleanup (remove sessions not updated in >24h)
+        asyncio.create_task(_stale_session_cleanup_loop())
+
+        # Event webhook dispatcher
+        from raspise.core.webhooks import run_webhook_dispatcher
+        asyncio.create_task(run_webhook_dispatcher())
+
+        # Prometheus metrics collector
+        from raspise.core.metrics import run_metrics_collector
+        asyncio.create_task(run_metrics_collector(bus))
 
         # Publish system-start event
         await bus.publish(Event(EventType.SYSTEM_START, data={"node": cfg.server.name}))
@@ -226,6 +282,15 @@ async def _lifespan(_app):
     # ── Shutdown ─────────────────────────────────────────────────────
     from raspise.profiler import profiler
     profiler.stop()
+
+    # Gracefully stop the RADIUS server if running
+    from raspise.radius.server import _active_radius_server
+    if _active_radius_server is not None:
+        try:
+            _active_radius_server._running = False
+        except Exception:
+            pass
+
     await bus.publish(Event(EventType.SYSTEM_STOP))
     log.info("RaspISE shutting down.")
 

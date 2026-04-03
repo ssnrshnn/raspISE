@@ -36,7 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from raspise.core.logger import get_logger
-from raspise.core.utils import normalise_mac, is_within_time_range
+from raspise.core.utils import normalise_mac, is_within_time_range, utcnow
 from raspise.db.models import Policy, PolicyAction
 
 log = get_logger(__name__)
@@ -57,7 +57,7 @@ class AuthContext:
     group_name: str         = ""        # resolved from DB
     device_type: str        = "unknown" # from profiler
     os_type: str            = "unknown"
-    timestamp: datetime     = field(default_factory=datetime.now)
+    timestamp: datetime     = field(default_factory=utcnow)
 
 
 @dataclass

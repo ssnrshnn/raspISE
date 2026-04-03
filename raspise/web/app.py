@@ -218,6 +218,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "font-src 'self' https://cdn.jsdelivr.net; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'"
+        )
         return response
 
 
@@ -294,6 +303,7 @@ async def do_login(
     request:  Request,
     username: str = Form(...),
     password: str = Form(...),
+    totp_code: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
     ip = request.client.host if request.client else "unknown"
@@ -310,6 +320,18 @@ async def do_login(
     user = (await db.execute(stmt)).scalar_one_or_none()
 
     if user and verify_password(password, user.password_hash):
+        # TOTP verification (if enabled for this user)
+        if user.totp_secret:
+            import pyotp
+            if not totp_code or not pyotp.TOTP(user.totp_secret).verify(totp_code, valid_window=1):
+                record_failure(ip)
+                return templates.TemplateResponse(
+                    request,
+                    "login.html",
+                    {"request": request, "error": "Invalid or missing TOTP code.", "totp_required": True},
+                    status_code=401,
+                )
+
         clear_failures(ip)
         user.last_login = datetime.now(timezone.utc)
         await db.commit()
@@ -548,10 +570,23 @@ def _form_float(form, key: str, default: float) -> float:
 async def settings_save(request: Request):
     """Save a config section from a form POST and reload the in-memory config."""
     _require_auth(request)
-    import yaml, os
+    import yaml, os, re as _re_settings
 
     form = await request.form()
     section = form.get("section", "")
+
+    # Whitelist allowed section names to prevent injection
+    _ALLOWED_SECTIONS = {
+        "server", "radius", "tacacs", "portal", "display",
+        "log_forwarding_syslog", "log_forwarding_graylog",
+        "log_forwarding_webhook", "ldap",
+    }
+    if section not in _ALLOWED_SECTIONS:
+        return RedirectResponse(url="/settings?error=Invalid+section", status_code=303)
+
+    def _sanitize_str(val: str, max_len: int = 256) -> str:
+        """Strip control characters and enforce max length."""
+        return _re_settings.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', val)[:max_len]
 
     cfg_path = os.environ.get("RASPISE_CONFIG", "/etc/raspise/config.yaml")
     if not os.path.exists(cfg_path):
@@ -565,8 +600,8 @@ async def settings_save(request: Request):
     # Map form fields into config dict based on section
     if section == "server":
         data.setdefault("server", {})
-        data["server"]["name"]      = form.get("name", data["server"].get("name", "RaspISE"))
-        data["server"]["log_level"] = form.get("log_level", "INFO")
+        data["server"]["name"]      = _sanitize_str(form.get("name", data["server"].get("name", "RaspISE")), 64)
+        data["server"]["log_level"] = form.get("log_level", "INFO") if form.get("log_level") in ("DEBUG","INFO","WARNING","ERROR","CRITICAL") else "INFO"
         data["server"]["debug"]     = form.get("debug") == "on"
 
     elif section == "radius":
@@ -585,13 +620,13 @@ async def settings_save(request: Request):
     elif section == "portal":
         data.setdefault("portal", {})
         data["portal"]["session_hours"] = _form_int(form, "session_hours", 8)
-        data["portal"]["guest_ssid"]    = form.get("guest_ssid", "")
-        data["portal"]["guest_psk"]     = form.get("guest_psk", "")
+        data["portal"]["guest_ssid"]    = _sanitize_str(form.get("guest_ssid", ""), 32)
+        data["portal"]["guest_psk"]     = _sanitize_str(form.get("guest_psk", ""), 63)
 
     elif section == "display":
         data.setdefault("display", {})
         data["display"]["enabled"]        = form.get("enabled") == "on"
-        data["display"]["driver"]         = form.get("driver", "simulation")
+        data["display"]["driver"]         = form.get("driver", "simulation") if form.get("driver") in ("ili9341", "st7789", "simulation") else "simulation"
         data["display"]["rotation"]       = _form_int(form, "rotation", 270)
         data["display"]["screen_cycle_seconds"] = _form_int(form, "cycle_interval", 8)
         screens_raw = form.get("screens", "")
@@ -601,25 +636,25 @@ async def settings_save(request: Request):
         data.setdefault("log_forwarding", {}).setdefault("syslog", {})
         sl = data["log_forwarding"]["syslog"]
         sl["enabled"]  = form.get("enabled") == "on"
-        sl["address"]  = form.get("address", "/dev/log")
-        sl["facility"] = form.get("facility", "local0")
-        sl["protocol"] = form.get("protocol", "udp")
+        sl["address"]  = _sanitize_str(form.get("address", "/dev/log"), 128)
+        sl["facility"] = form.get("facility", "local0") if form.get("facility") in ("local0","local1","local2","local3","local4","local5","local6","local7","daemon","auth","syslog") else "local0"
+        sl["protocol"] = form.get("protocol", "udp") if form.get("protocol") in ("udp", "tcp") else "udp"
         sl["port"]     = _form_int(form, "port", 514)
 
     elif section == "log_forwarding_graylog":
         data.setdefault("log_forwarding", {}).setdefault("graylog", {})
         gl = data["log_forwarding"]["graylog"]
         gl["enabled"]  = form.get("enabled") == "on"
-        gl["host"]     = form.get("host", "127.0.0.1")
+        gl["host"]     = _sanitize_str(form.get("host", "127.0.0.1"), 128)
         gl["port"]     = _form_int(form, "port", 12201)
-        gl["protocol"] = form.get("protocol", "udp")
+        gl["protocol"] = form.get("protocol", "udp") if form.get("protocol") in ("udp", "tcp") else "udp"
 
     elif section == "log_forwarding_webhook":
         data.setdefault("log_forwarding", {}).setdefault("webhook", {})
         wh = data["log_forwarding"]["webhook"]
         wh["enabled"]                 = form.get("enabled") == "on"
-        wh["url"]                     = form.get("url", "")
-        wh["level"]                   = form.get("level", "WARNING")
+        wh["url"]                     = _sanitize_str(form.get("url", ""), 512)
+        wh["level"]                   = form.get("level", "WARNING") if form.get("level") in ("DEBUG","INFO","WARNING","ERROR","CRITICAL") else "WARNING"
         wh["timeout_seconds"]         = _form_float(form, "timeout_seconds", 3.0)
         wh["batch_size"]              = _form_int(form, "batch_size", 10)
         wh["batch_interval_seconds"]  = _form_float(form, "batch_interval_seconds", 5.0)
@@ -636,14 +671,14 @@ async def settings_save(request: Request):
         data.setdefault("ldap", {})
         ld = data["ldap"]
         ld["enabled"]         = form.get("enabled") == "on"
-        ld["server"]          = form.get("server", "ldap://dc.example.com")
+        ld["server"]          = _sanitize_str(form.get("server", "ldap://dc.example.com"), 256)
         ld["port"]            = _form_int(form, "port", 389)
         ld["use_ssl"]         = form.get("use_ssl") == "on"
-        ld["bind_dn"]         = form.get("bind_dn", "")
-        ld["bind_password"]   = form.get("bind_password", "")
-        ld["base_dn"]         = form.get("base_dn", "")
-        ld["user_filter"]     = form.get("user_filter", "(sAMAccountName={username})")
-        ld["group_attribute"] = form.get("group_attribute", "memberOf")
+        ld["bind_dn"]         = _sanitize_str(form.get("bind_dn", ""), 512)
+        ld["bind_password"]   = _sanitize_str(form.get("bind_password", ""), 256)
+        ld["base_dn"]         = _sanitize_str(form.get("base_dn", ""), 512)
+        ld["user_filter"]     = _sanitize_str(form.get("user_filter", "(sAMAccountName={username})"), 256)
+        ld["group_attribute"] = _sanitize_str(form.get("group_attribute", "memberOf"), 64)
         # Parse group_map_raw textarea ("LDAP DN = RaspISE group" per line)
         group_map: dict[str, str] = {}
         for line in (form.get("group_map_raw", "") or "").splitlines():

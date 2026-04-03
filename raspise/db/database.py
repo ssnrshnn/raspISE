@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -29,7 +30,17 @@ def _get_engine():
                     cfg.database.url,
                     echo=cfg.server.debug,
                     pool_pre_ping=True,
+                    connect_args={"check_same_thread": False},
                 )
+
+                # Enable WAL mode and busy timeout for better
+                # concurrent read/write performance on SQLite
+                @event.listens_for(_engine.sync_engine, "connect")
+                def _set_sqlite_pragmas(dbapi_conn, connection_record):
+                    cursor = dbapi_conn.cursor()
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA busy_timeout=5000")
+                    cursor.close()
     return _engine
 
 

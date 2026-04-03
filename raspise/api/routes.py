@@ -70,12 +70,76 @@ from raspise.api.schemas import (
 from raspise.config import get_config
 from raspise.db import get_db
 from raspise.db.models import (
-    ActiveSession, AdminUser, AuthLog, AuthResult,
+    ActiveSession, AdminUser, AdminAuditLog, AuthLog, AuthResult,
     CommandRule, CommandSet,
     Device, Group, GuestSession, NasClient, Policy, TacacsLog, User,
 )
 
 router = APIRouter(prefix="/api/v1")
+
+
+async def _audit(
+    db: AsyncSession,
+    admin: AdminUser,
+    action: str,
+    resource_type: str,
+    resource_id: str = "",
+    detail: str = "",
+) -> None:
+    """Record an admin audit log entry."""
+    db.add(AdminAuditLog(
+        admin_username=admin.username,
+        action=action,
+        resource_type=resource_type,
+        resource_id=str(resource_id),
+        detail=detail[:1024],
+    ))
+
+
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+@router.get("/health", tags=["Health"])
+async def health_check(db: AsyncSession = Depends(get_db)):
+    """Health check endpoint — returns service status and uptime."""
+    import time
+    from raspise.config import get_config
+    cfg = get_config()
+
+    # Check DB connectivity
+    db_ok = True
+    try:
+        await db.execute(select(func.count()).select_from(AdminUser))
+    except Exception:
+        db_ok = False
+
+    services = {
+        "radius": cfg.radius.enabled,
+        "tacacs": cfg.tacacs.enabled,
+        "profiler": cfg.profiler.enabled,
+        "portal": cfg.portal.enabled,
+    }
+
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "database": "connected" if db_ok else "error",
+        "services": services,
+        "server_name": cfg.server.name,
+        "version": "1.0.0",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics
+# ---------------------------------------------------------------------------
+
+@router.get("/metrics", tags=["Health"], include_in_schema=False)
+async def prometheus_metrics():
+    """Prometheus-compatible metrics endpoint (no auth required)."""
+    from starlette.responses import Response
+    from raspise.core.metrics import render_metrics
+    return Response(content=render_metrics(), media_type="text/plain; charset=utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +166,19 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
         record_failure(ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
+    # TOTP verification (if enabled for this user)
+    if user.totp_secret:
+        import pyotp
+        if not body.totp_code:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="TOTP code required",
+            )
+        totp = pyotp.TOTP(user.totp_secret)
+        if not totp.verify(body.totp_code, valid_window=1):
+            record_failure(ip)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid TOTP code")
+
     clear_failures(ip)
     user.last_login = datetime.now(timezone.utc)
     await db.commit()
@@ -111,6 +188,49 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
         access_token=token,
         expires_in=cfg.api.token_expire_minutes * 60,
     )
+
+
+@router.post("/auth/totp/setup", tags=["Auth"])
+async def totp_setup(
+    db: AsyncSession = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
+):
+    """Generate a new TOTP secret for the current admin. Returns the provisioning URI."""
+    import pyotp
+    secret = pyotp.random_base32()
+    uri = pyotp.TOTP(secret).provisioning_uri(
+        name=admin.username, issuer_name="RaspISE"
+    )
+    # Store secret but don't activate yet — user must verify first
+    return {"secret": secret, "provisioning_uri": uri}
+
+
+@router.post("/auth/totp/verify", tags=["Auth"])
+async def totp_verify(
+    code: str = Query(..., min_length=6, max_length=6),
+    secret: str = Query(..., min_length=16, max_length=64),
+    db: AsyncSession = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
+):
+    """Verify a TOTP code and activate 2FA for the current admin."""
+    import pyotp
+    totp = pyotp.TOTP(secret)
+    if not totp.verify(code, valid_window=1):
+        raise HTTPException(400, "Invalid TOTP code — scan the QR code and try again")
+    admin.totp_secret = secret
+    await db.commit()
+    return {"status": "ok", "message": "TOTP enabled"}
+
+
+@router.post("/auth/totp/disable", tags=["Auth"])
+async def totp_disable(
+    db: AsyncSession = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
+):
+    """Disable TOTP 2FA for the current admin."""
+    admin.totp_secret = None
+    await db.commit()
+    return {"status": "ok", "message": "TOTP disabled"}
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +257,7 @@ async def list_users(
 async def create_user(
     body: UserCreate,
     db:   AsyncSession = Depends(get_db),
-    _:    AdminUser    = Depends(get_current_admin),
+    admin: AdminUser   = Depends(get_current_admin),
 ):
     # Unique username check
     existing = (await db.execute(select(User).where(User.username == body.username))).scalar_one_or_none()
@@ -153,6 +273,7 @@ async def create_user(
         enabled       = body.enabled,
     )
     db.add(user)
+    await _audit(db, admin, "CREATE", "user", "", f"username={body.username}")
     await db.commit()
     await db.refresh(user)
     return UserOut.model_validate(user)
@@ -197,11 +318,12 @@ async def update_user(
 async def delete_user(
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    _:  AdminUser    = Depends(get_current_admin),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not user:
         raise HTTPException(404, "User not found")
+    await _audit(db, admin, "DELETE", "user", str(user_id), f"username={user.username}")
     await db.delete(user)
     await db.commit()
     return StatusResponse(status="ok", message=f"User {user_id} deleted")
@@ -213,10 +335,11 @@ async def delete_user(
 
 @router.get("/groups", response_model=list[GroupOut], tags=["Groups"])
 async def list_groups(
+    skip: int = 0, limit: int = Query(50, le=200),
     db: AsyncSession = Depends(get_db),
     _:  AdminUser    = Depends(get_current_admin),
 ):
-    result = (await db.execute(select(Group))).scalars().all()
+    result = (await db.execute(select(Group).offset(skip).limit(limit))).scalars().all()
     return [GroupOut.model_validate(g) for g in result]
 
 
@@ -341,10 +464,11 @@ async def delete_device(
 
 @router.get("/policies", response_model=list[PolicyOut], tags=["Policies"])
 async def list_policies(
+    skip: int = 0, limit: int = Query(50, le=200),
     db: AsyncSession = Depends(get_db),
     _:  AdminUser    = Depends(get_current_admin),
 ):
-    stmt   = select(Policy).order_by(Policy.priority)
+    stmt   = select(Policy).order_by(Policy.priority).offset(skip).limit(limit)
     result = (await db.execute(stmt)).scalars().all()
     return [PolicyOut.model_validate(p) for p in result]
 
@@ -353,7 +477,7 @@ async def list_policies(
 async def create_policy(
     body: PolicyCreate,
     db:   AsyncSession = Depends(get_db),
-    _:    AdminUser    = Depends(get_current_admin),
+    admin: AdminUser   = Depends(get_current_admin),
 ):
     pol = Policy(
         name        = body.name,
@@ -366,6 +490,7 @@ async def create_policy(
         enabled     = body.enabled,
     )
     db.add(pol)
+    await _audit(db, admin, "CREATE", "policy", "", f"name={body.name}")
     await db.commit()
     await db.refresh(pol)
     return PolicyOut.model_validate(pol)
@@ -398,11 +523,12 @@ async def update_policy(
 async def delete_policy(
     policy_id: int,
     db: AsyncSession = Depends(get_db),
-    _:  AdminUser    = Depends(get_current_admin),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     pol = (await db.execute(select(Policy).where(Policy.id == policy_id))).scalar_one_or_none()
     if not pol:
         raise HTTPException(404, "Policy not found")
+    await _audit(db, admin, "DELETE", "policy", str(policy_id), f"name={pol.name}")
     await db.delete(pol)
     await db.commit()
     return StatusResponse(status="ok", message=f"Policy {policy_id} deleted")
@@ -445,16 +571,47 @@ async def tacacs_logs(
     return [TacacsLogOut.model_validate(r) for r in rows]
 
 
+@router.get("/logs/audit", tags=["Logs"])
+async def audit_logs(
+    skip: int = 0, limit: int = Query(100, le=500),
+    admin_username: str | None = None,
+    action: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    _:  AdminUser    = Depends(get_current_admin),
+):
+    stmt = select(AdminAuditLog).order_by(AdminAuditLog.timestamp.desc()).offset(skip).limit(limit)
+    if admin_username:
+        stmt = stmt.where(AdminAuditLog.admin_username == admin_username)
+    if action:
+        stmt = stmt.where(AdminAuditLog.action == action.upper())
+    rows = (await db.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "timestamp": r.timestamp.isoformat(),
+            "admin_username": r.admin_username,
+            "action": r.action,
+            "resource_type": r.resource_type,
+            "resource_id": r.resource_id,
+            "detail": r.detail,
+        }
+        for r in rows
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Active Sessions
 # ---------------------------------------------------------------------------
 
 @router.get("/sessions", response_model=list[ActiveSessionOut], tags=["Sessions"])
 async def active_sessions(
+    skip: int = 0, limit: int = Query(100, le=500),
     db: AsyncSession = Depends(get_db),
     _:  AdminUser    = Depends(get_current_admin),
 ):
-    rows = (await db.execute(select(ActiveSession))).scalars().all()
+    rows = (await db.execute(
+        select(ActiveSession).order_by(ActiveSession.started_at.desc()).offset(skip).limit(limit)
+    )).scalars().all()
     return [ActiveSessionOut.model_validate(r) for r in rows]
 
 
