@@ -132,18 +132,18 @@ async def landing(request: Request):
 
 @app.post("/register", response_class=HTMLResponse)
 async def register(
-    request:   Request,
-    full_name: Annotated[str, Form()],
-    email:     Annotated[str, Form()],
-    mac:       Annotated[str, Form()] = "",
-    _csrf:     Annotated[str, Form()] = "",
-    db:        AsyncSession = Depends(get_db),
+    request:      Request,
+    full_name:    Annotated[str, Form()],
+    email:        Annotated[str, Form()],
+    mac:          Annotated[str, Form()] = "",
+    csrf_token:   Annotated[str, Form()] = "",
+    db:           AsyncSession = Depends(get_db),
 ):
     cfg = get_config().portal
     ip = request.client.host if request.client else "unknown"
 
     # CSRF validation
-    if not _csrf or not _csrf_validate(_csrf, ip):
+    if not csrf_token or not _csrf_validate(csrf_token, ip):
         return templates.TemplateResponse(request, "portal.html", {
             "request": request, "mac": mac, "ssid": cfg.guest_ssid,
             "error": "Invalid form submission. Please reload and try again.",
