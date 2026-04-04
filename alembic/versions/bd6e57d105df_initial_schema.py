@@ -149,6 +149,20 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
     )
+    op.create_table('admin_audit_logs',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('timestamp', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('admin_username', sa.String(length=64), nullable=False),
+    sa.Column('action', sa.String(length=32), nullable=False),
+    sa.Column('resource_type', sa.String(length=64), nullable=False),
+    sa.Column('resource_id', sa.String(length=64), nullable=False),
+    sa.Column('detail', sa.Text(), nullable=False),
+    sa.PrimaryKeyConstraint('id')
+    )
+    with op.batch_alter_table('admin_audit_logs', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_admin_audit_logs_timestamp'), ['timestamp'], unique=False)
+        batch_op.create_index(batch_op.f('ix_admin_audit_logs_admin_username'), ['admin_username'], unique=False)
+
     op.create_table('command_rules',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('command_set_id', sa.Integer(), nullable=False),
@@ -237,6 +251,11 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_auth_logs_mac_address'))
 
     op.drop_table('auth_logs')
+    with op.batch_alter_table('admin_audit_logs', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_admin_audit_logs_admin_username'))
+        batch_op.drop_index(batch_op.f('ix_admin_audit_logs_timestamp'))
+
+    op.drop_table('admin_audit_logs')
     with op.batch_alter_table('users', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_users_username'))
 
