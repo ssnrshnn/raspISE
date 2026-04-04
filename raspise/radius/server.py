@@ -352,12 +352,15 @@ class RaspISERadiusServer(pyrad.server.Server):
 
     async def _check_user_password(self, username: str, password: str) -> tuple[AuthResult, str]:
         import bcrypt
+        from datetime import datetime, timezone
         async with AsyncSessionLocal() as db:
             from sqlalchemy import select
             stmt = select(User).where(User.username == username, User.enabled == True)
             row = (await db.execute(stmt)).scalar_one_or_none()
             if row is not None:
                 if bcrypt.checkpw(password.encode(), row.password_hash.encode()):
+                    row.last_login = datetime.now(timezone.utc)
+                    await db.commit()
                     return AuthResult.SUCCESS, ""
                 # Local user exists but wrong password — don't fall through to LDAP
                 return AuthResult.FAILURE, "Wrong password"

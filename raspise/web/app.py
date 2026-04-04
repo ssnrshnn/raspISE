@@ -594,6 +594,16 @@ async def settings_save(request: Request):
             os.path.dirname(__file__), "..", "config", "config.yaml"
         )
 
+    # Validate the resolved path is within an allowed directory (prevent path traversal)
+    _ALLOWED_CONFIG_DIRS = (
+        os.path.realpath("/etc/raspise"),
+        os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "config")),
+    )
+    real_cfg_path = os.path.realpath(cfg_path)
+    if not any(real_cfg_path.startswith(d + os.sep) or real_cfg_path == os.path.join(d, "config.yaml")
+               for d in _ALLOWED_CONFIG_DIRS):
+        return RedirectResponse(url="/settings?error=Invalid+config+path", status_code=303)
+
     with open(cfg_path) as f:
         data = yaml.safe_load(f) or {}
 
@@ -1093,6 +1103,10 @@ async def create_admin_user(
     db: AsyncSession = Depends(get_db),
 ):
     current = _require_auth(request)
+    # Rate limit admin creation to prevent brute-force account seeding
+    ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(f"admin-create:{ip}"):
+        return RedirectResponse(url="/admin-users?error=Too+many+requests.+Try+again+later.", status_code=303)
     if len(password) < 8:
         return RedirectResponse(url="/admin-users?error=Password+must+be+at+least+8+characters", status_code=303)
     if len(username) < 2 or len(username) > 64:

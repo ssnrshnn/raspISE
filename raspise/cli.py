@@ -15,8 +15,26 @@ import sys
 from pathlib import Path
 
 import click
+from sqlalchemy.engine import make_url
 
 from raspise.config import get_config
+
+
+def _sqlite_path_from_url(db_url: str) -> Path:
+    """Extract the filesystem path from a SQLite URL, or exit with error."""
+    try:
+        url = make_url(db_url)
+    except Exception as exc:
+        click.secho(f"Invalid database URL: {exc}", fg="red")
+        sys.exit(1)
+    if url.get_backend_name() != "sqlite":
+        click.secho("Only SQLite databases are supported for this command.", fg="red")
+        sys.exit(1)
+    # url.database is the path portion (None for :memory:)
+    if not url.database:
+        click.secho("In-memory databases cannot be backed up/restored.", fg="red")
+        sys.exit(1)
+    return Path(url.database)
 
 
 @click.group()
@@ -56,6 +74,12 @@ def reset_password(username: str, password: str):
     if len(password) < 8:
         click.secho("Password must be at least 8 characters.", fg="red")
         sys.exit(1)
+    if not any(c.isalpha() for c in password):
+        click.secho("Password must contain at least one letter.", fg="red")
+        sys.exit(1)
+    if not any(c.isdigit() for c in password):
+        click.secho("Password must contain at least one digit.", fg="red")
+        sys.exit(1)
 
     async def _reset():
         from sqlalchemy import select
@@ -85,19 +109,7 @@ def reset_password(username: str, password: str):
 def backup(output: str):
     """Copy the SQLite database file to the specified path."""
     cfg = get_config()
-    db_url = cfg.database.url
-    # Extract the file path from the SQLite URL
-    # Format: sqlite+aiosqlite:////var/lib/raspise/raspise.db
-    if ":///" in db_url:
-        db_path = db_url.split(":///", 1)[1]
-        # For absolute paths, sqlite uses 4 slashes: sqlite:////abs/path
-        if db_path.startswith("/"):
-            pass  # already absolute
-    else:
-        click.secho("Backup only supports SQLite databases.", fg="red")
-        sys.exit(1)
-
-    src = Path(db_path)
+    src = _sqlite_path_from_url(cfg.database.url)
     if not src.exists():
         click.secho(f"Database file not found: {src}", fg="red")
         sys.exit(1)
@@ -118,15 +130,20 @@ def backup(output: str):
 @click.confirmation_option(prompt="This will overwrite the current database. Continue?")
 def restore(input_file: str):
     """Restore a SQLite database backup."""
-    cfg = get_config()
-    db_url = cfg.database.url
-    if ":///" in db_url:
-        db_path = db_url.split(":///", 1)[1]
-    else:
-        click.secho("Restore only supports SQLite databases.", fg="red")
+    # Validate that the input file is actually a SQLite database
+    _SQLITE_MAGIC = b"SQLite format 3\000"
+    try:
+        with open(input_file, "rb") as f:
+            header = f.read(16)
+        if header[:16] != _SQLITE_MAGIC:
+            click.secho("Error: input file is not a valid SQLite database.", fg="red")
+            sys.exit(1)
+    except OSError as exc:
+        click.secho(f"Error reading input file: {exc}", fg="red")
         sys.exit(1)
 
-    dst = Path(db_path)
+    cfg = get_config()
+    dst = _sqlite_path_from_url(cfg.database.url)
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(input_file, dst)
     click.secho(f"Restored database from {input_file}", fg="green")

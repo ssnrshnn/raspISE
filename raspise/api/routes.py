@@ -368,6 +368,11 @@ async def delete_group(
     grp = (await db.execute(select(Group).where(Group.id == group_id))).scalar_one_or_none()
     if not grp:
         raise HTTPException(404, "Group not found")
+    user_count = (await db.execute(
+        select(func.count()).select_from(User).where(User.group_id == group_id)
+    )).scalar() or 0
+    if user_count > 0:
+        raise HTTPException(409, f"Cannot delete group — {user_count} user(s) still assigned")
     await db.delete(grp)
     await db.commit()
     return StatusResponse(status="ok", message=f"Group {group_id} deleted")

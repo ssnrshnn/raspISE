@@ -93,7 +93,11 @@ async def _seed_database() -> None:
 # RADIUS thread
 # ---------------------------------------------------------------------------
 
+_radius_thread: threading.Thread | None = None
+
+
 def _start_radius_thread(loop: asyncio.AbstractEventLoop) -> None:
+    global _radius_thread
     cfg = get_config()
     if not cfg.radius.enabled:
         log.info("RADIUS server disabled in config")
@@ -107,6 +111,7 @@ def _start_radius_thread(loop: asyncio.AbstractEventLoop) -> None:
         name="radius-server",
     )
     t.start()
+    _radius_thread = t
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +134,22 @@ def _start_profiler(loop: asyncio.AbstractEventLoop) -> None:
 
 _LOG_RETENTION_DAYS = 90
 _LOG_CLEANUP_INTERVAL = 3600  # check once per hour
+
+
+def _task_done_callback(task: asyncio.Task) -> None:
+    """Log unhandled exceptions from background tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("Background task %r crashed: %s", task.get_name(), exc, exc_info=exc)
+
+
+def _create_monitored_task(coro, *, name: str | None = None) -> asyncio.Task:
+    """Create an asyncio task with an error-logging done callback."""
+    task = asyncio.create_task(coro, name=name)
+    task.add_done_callback(_task_done_callback)
+    return task
 
 
 async def _log_retention_loop() -> None:
@@ -191,60 +212,60 @@ async def _lifespan(_app):
     loop = asyncio.get_running_loop()
     bus.set_loop(loop)
 
-    log.info("═══════════════════════════════════════")
-    log.info("  RaspISE v1.0  —  %s", cfg.server.name)
-    log.info("═══════════════════════════════════════")
-
-    # Warn if using insecure default secret key
-    _INSECURE_KEYS = {"change_me", "CHANGE_ME_USE_A_STRONG_RANDOM_STRING", ""}
-    if cfg.server.secret_key in _INSECURE_KEYS:
-        log.warning(
-            "╔════════════════════════════════════════════════════════════╗"
-        )
-        log.warning(
-            "║  WARNING: server.secret_key is set to the default value!  ║"
-        )
-        log.warning(
-            "║  JWT tokens and session cookies are NOT secure.           ║"
-        )
-        log.warning(
-            "║  Generate a new key: python3 -c 'import secrets;          ║"
-        )
-        log.warning(
-            "║    print(secrets.token_hex(32))'                          ║"
-        )
-        log.warning(
-            "╚════════════════════════════════════════════════════════════╝"
-        )
-
-    # Warn if using default admin credentials
-    _DEFAULT_PASSWORDS = {"RaspISE@admin1", "admin", "password", ""}
-    if cfg.web.admin_password in _DEFAULT_PASSWORDS:
-        log.warning("╔════════════════════════════════════════════════════════════╗")
-        log.warning("║  WARNING: admin password is set to the default value!     ║")
-        log.warning("║  Change it in config.yaml → web.admin_password            ║")
-        log.warning("╚════════════════════════════════════════════════════════════╝")
-
-    # Warn if using default TACACS+ key
-    if cfg.tacacs.enabled and cfg.tacacs.key in ("tacacs_secret", "testing123", ""):
-        log.warning("╔════════════════════════════════════════════════════════════╗")
-        log.warning("║  WARNING: TACACS+ key is set to the default value!        ║")
-        log.warning("║  Change it in config.yaml → tacacs.key                    ║")
-        log.warning("╚════════════════════════════════════════════════════════════╝")
-
-    await init_db()
-    await _seed_database()
-
     with _services_lock:
         _should_start = not _services_started
         if _should_start:
             _services_started = True
 
     if _should_start:
+        log.info("═══════════════════════════════════════")
+        log.info("  RaspISE v1.0  —  %s", cfg.server.name)
+        log.info("═══════════════════════════════════════")
+
+        # Warn if using insecure default secret key
+        _INSECURE_KEYS = {"change_me", "CHANGE_ME_USE_A_STRONG_RANDOM_STRING", ""}
+        if cfg.server.secret_key in _INSECURE_KEYS:
+            log.warning(
+                "╔════════════════════════════════════════════════════════════╗"
+            )
+            log.warning(
+                "║  WARNING: server.secret_key is set to the default value!  ║"
+            )
+            log.warning(
+                "║  JWT tokens and session cookies are NOT secure.           ║"
+            )
+            log.warning(
+                "║  Generate a new key: python3 -c 'import secrets;          ║"
+            )
+            log.warning(
+                "║    print(secrets.token_hex(32))'                          ║"
+            )
+            log.warning(
+                "╚════════════════════════════════════════════════════════════╝"
+            )
+
+        # Warn if using default admin credentials
+        _DEFAULT_PASSWORDS = {"RaspISE@admin1", "admin", "password", ""}
+        if cfg.web.admin_password in _DEFAULT_PASSWORDS:
+            log.warning("╔════════════════════════════════════════════════════════════╗")
+            log.warning("║  WARNING: admin password is set to the default value!     ║")
+            log.warning("║  Change it in config.yaml → web.admin_password            ║")
+            log.warning("╚════════════════════════════════════════════════════════════╝")
+
+        # Warn if using default TACACS+ key
+        if cfg.tacacs.enabled and cfg.tacacs.key in ("tacacs_secret", "testing123", ""):
+            log.warning("╔════════════════════════════════════════════════════════════╗")
+            log.warning("║  WARNING: TACACS+ key is set to the default value!        ║")
+            log.warning("║  Change it in config.yaml → tacacs.key                    ║")
+            log.warning("╚════════════════════════════════════════════════════════════╝")
+
+        await init_db()
+        await _seed_database()
+
         # TACACS+
         if cfg.tacacs.enabled:
             from raspise.tacacs import run_tacacs_server
-            asyncio.create_task(run_tacacs_server())
+            _create_monitored_task(run_tacacs_server(), name="tacacs-server")
 
         # RADIUS (blocking UDP server — needs its own thread)
         _start_radius_thread(loop)
@@ -254,21 +275,21 @@ async def _lifespan(_app):
 
         # Guest session expiry cleanup
         from raspise.portal.app import expire_guest_sessions_loop
-        asyncio.create_task(expire_guest_sessions_loop())
+        _create_monitored_task(expire_guest_sessions_loop(), name="guest-session-expiry")
 
         # Log retention cleanup (prune old auth_logs and tacacs_logs)
-        asyncio.create_task(_log_retention_loop())
+        _create_monitored_task(_log_retention_loop(), name="log-retention")
 
         # Stale session cleanup (remove sessions not updated in >24h)
-        asyncio.create_task(_stale_session_cleanup_loop())
+        _create_monitored_task(_stale_session_cleanup_loop(), name="stale-session-cleanup")
 
         # Event webhook dispatcher
         from raspise.core.webhooks import run_webhook_dispatcher
-        asyncio.create_task(run_webhook_dispatcher())
+        _create_monitored_task(run_webhook_dispatcher(), name="webhook-dispatcher")
 
         # Prometheus metrics collector
         from raspise.core.metrics import run_metrics_collector
-        asyncio.create_task(run_metrics_collector(bus))
+        _create_monitored_task(run_metrics_collector(bus), name="metrics-collector")
 
         # Publish system-start event
         await bus.publish(Event(EventType.SYSTEM_START, data={"node": cfg.server.name}))
@@ -290,6 +311,10 @@ async def _lifespan(_app):
             _active_radius_server._running = False
         except Exception:
             pass
+    if _radius_thread is not None and _radius_thread.is_alive():
+        _radius_thread.join(timeout=5)
+        if _radius_thread.is_alive():
+            log.warning("RADIUS thread did not exit within 5 s")
 
     await bus.publish(Event(EventType.SYSTEM_STOP))
     log.info("RaspISE shutting down.")

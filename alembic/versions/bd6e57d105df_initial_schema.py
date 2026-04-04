@@ -46,6 +46,7 @@ def upgrade() -> None:
     sa.Column('email', sa.String(length=128), nullable=False),
     sa.Column('is_superuser', sa.Boolean(), nullable=False),
     sa.Column('enabled', sa.Boolean(), nullable=False),
+    sa.Column('totp_secret', sa.String(length=64), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('last_login', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id'),

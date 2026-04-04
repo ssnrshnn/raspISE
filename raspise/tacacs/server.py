@@ -581,7 +581,7 @@ def _evaluate_command_rules(rules, command: str) -> bool:
     """Evaluate command rules in priority order. First match wins. Default deny."""
     import fnmatch
     cmd_lower = command.strip().lower()
-    for rule in sorted(rules, key=lambda r: r.priority):
+    for rule in sorted(rules, key=lambda r: (r.priority, r.id)):
         pattern = rule.command_pattern.strip().lower()
         if fnmatch.fnmatch(cmd_lower, pattern):
             # If args_pattern is set, also check the full command string

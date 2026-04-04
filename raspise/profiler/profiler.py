@@ -184,10 +184,12 @@ class DeviceProfiler:
             return
 
         iface = self._resolve_iface()
-        try:
-            # Use timeout=1.0 so the loop re-checks self._running at least once per
-            # second even when no packets arrive, ensuring stop() returns promptly.
-            while self._running:
+        backoff = 1.0
+        max_backoff = 60.0
+        while self._running:
+            try:
+                # Use timeout=1.0 so the loop re-checks self._running at least once per
+                # second even when no packets arrive, ensuring stop() returns promptly.
                 sniff(
                     iface=iface,
                     filter="udp port 67 or 68 or arp",
@@ -196,8 +198,14 @@ class DeviceProfiler:
                     stop_filter=lambda _: not self._running,
                     timeout=1.0,
                 )
-        except Exception as exc:
-            log.error("Profiler sniffer error: %s", exc)
+                backoff = 1.0  # reset on clean iteration
+            except Exception as exc:
+                if not self._running:
+                    break
+                log.error("Profiler sniffer error (restarting in %.0fs): %s", backoff, exc)
+                import time
+                time.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
 
     def _process_packet(self, pkt) -> None:
         try:

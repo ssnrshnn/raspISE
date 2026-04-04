@@ -37,6 +37,27 @@ rsync -a --delete \
 info "Updating Python dependencies…"
 "$VENV/bin/pip" install --quiet -r "$RASPISE_DIR/requirements.txt"
 
+info "Running database migrations…"
+DB_PATH="/var/lib/raspise/raspise.db"
+if [[ -f "$DB_PATH" ]]; then
+  # If the DB exists but has no alembic_version table, stamp it with
+  # the initial schema revision so future migrations apply cleanly.
+  HAS_ALEMBIC=$("$VENV/bin/python" -c "
+import sqlite3, sys
+con = sqlite3.connect('$DB_PATH')
+cur = con.execute(\"SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'\")
+print('yes' if cur.fetchone() else 'no')
+con.close()
+")
+  if [[ "$HAS_ALEMBIC" == "no" ]]; then
+    info "First-time Alembic setup — stamping existing DB with initial revision…"
+    cd "$RASPISE_DIR"
+    "$VENV/bin/python" -m alembic stamp bd6e57d105df
+  fi
+fi
+cd "$RASPISE_DIR"
+"$VENV/bin/python" -m alembic upgrade head
+
 info "Installing/updating systemd service units…"
 cp "$RASPISE_DIR/systemd/raspise.service"         /etc/systemd/system/raspise.service
 cp "$RASPISE_DIR/systemd/raspise-display.service" /etc/systemd/system/raspise-display.service

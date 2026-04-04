@@ -52,10 +52,19 @@ class EventBus:
         self._subscribers: list[asyncio.Queue[Event]] = []
         self._lock = asyncio.Lock()
         self._main_loop: asyncio.AbstractEventLoop | None = None
+        self._pending_events: list[Event] = []  # buffer for events before loop is ready
+        import threading
+        self._pending_lock = threading.Lock()
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Register the main event loop so sync callers can schedule coroutines."""
         self._main_loop = loop
+        # Flush any events that were published before the loop was ready
+        with self._pending_lock:
+            pending = list(self._pending_events)
+            self._pending_events.clear()
+        for evt in pending:
+            asyncio.run_coroutine_threadsafe(self.publish(evt), loop)
 
     async def subscribe(self) -> asyncio.Queue[Event]:
         """Register a new subscriber and return its private queue."""
@@ -87,7 +96,11 @@ class EventBus:
         """Fire-and-forget from sync code (e.g. RADIUS server thread)."""
         if self._main_loop and self._main_loop.is_running():
             asyncio.run_coroutine_threadsafe(self.publish(event), self._main_loop)
-        # Silently discard events published before the loop is ready
+        else:
+            # Buffer events published before the loop is ready
+            with self._pending_lock:
+                if len(self._pending_events) < self._max_queue_size:
+                    self._pending_events.append(event)
 
 
 # Module-level singleton — import this everywhere

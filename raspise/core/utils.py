@@ -78,6 +78,8 @@ def chap_verify(identifier: bytes, password: str, chap_response: bytes) -> bool:
     ``chap_response[:16]`` is the peer's response and ``chap_response[16:]``
     is the challenge used in the hash: MD5(id || secret || challenge).
     """
+    if len(chap_response) < 17:
+        return False  # need at least 16-byte response + 1-byte challenge
     challenge = chap_response[16:]
     expected  = hashlib.md5(identifier + password.encode() + challenge).digest()
     return hmac.compare_digest(expected, chap_response[:16])

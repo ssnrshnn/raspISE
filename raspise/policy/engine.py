@@ -134,14 +134,26 @@ def _string_match(subject: str, op: str, pattern: str) -> bool:
     if op == "endswith":   return s.endswith(p)
     if op == "contains":   return p in s
     if op == "regex":
+        import concurrent.futures
         try:
-            # Compile with a size guard — reject patterns over 256 chars to mitigate ReDoS
+            # Reject patterns over 256 chars
             if len(pattern) > 256:
                 log.warning("Regex pattern too long (%d chars) — treating as no-match", len(pattern))
                 return False
+            # Reject patterns with nested quantifiers (ReDoS vectors)
+            # e.g. (a+)+, (a*)+, (a|b+)+, (\d+)+
+            if re.search(r'\([^)]*[+*][^)]*\)[+*?]', pattern):
+                log.warning("Regex pattern %r contains nested quantifiers (ReDoS risk) — treating as no-match", pattern)
+                return False
             compiled = re.compile(pattern, re.IGNORECASE)
-            # Use re.search with a bounded subject
-            return bool(compiled.search(subject[:1024]))
+            # Run regex with a timeout to prevent catastrophic backtracking
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(compiled.search, subject[:1024])
+                result = future.result(timeout=2.0)
+            return bool(result)
+        except concurrent.futures.TimeoutError:
+            log.warning("Regex pattern %r timed out — treating as no-match", pattern)
+            return False
         except re.error as exc:
             log.warning("Invalid regex pattern %r in policy condition: %s", pattern, exc)
             return False

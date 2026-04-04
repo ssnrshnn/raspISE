@@ -22,6 +22,8 @@ Endpoints
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -45,6 +47,23 @@ app = FastAPI(title="RaspISE Guest Portal", docs_url=None, redoc_url=None)
 import os
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=_TEMPLATE_DIR)
+
+
+# ---------------------------------------------------------------------------
+# CSRF helpers
+# ---------------------------------------------------------------------------
+
+_CSRF_SECRET = os.environ.get("RASPISE_CSRF_SECRET", generate_token(32))
+
+
+def _csrf_generate(session_id: str) -> str:
+    """Create an HMAC-based CSRF token tied to a pseudo-session."""
+    return hmac.new(_CSRF_SECRET.encode(), session_id.encode(), hashlib.sha256).hexdigest()
+
+
+def _csrf_validate(token: str, session_id: str) -> bool:
+    expected = _csrf_generate(session_id)
+    return hmac.compare_digest(token, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -99,11 +118,15 @@ def _get_client_mac(request: Request) -> str:
 async def landing(request: Request):
     cfg = get_config().portal
     mac = _get_client_mac(request)
+    # Use client IP as pseudo-session for CSRF
+    session_id = request.client.host if request.client else "unknown"
+    csrf_token = _csrf_generate(session_id)
     return templates.TemplateResponse(request, "portal.html", {
-        "request":  request,
-        "mac":      mac,
-        "ssid":     cfg.guest_ssid,
-        "redirect": request.query_params.get("redirect", "http://example.com"),
+        "request":    request,
+        "mac":        mac,
+        "ssid":       cfg.guest_ssid,
+        "redirect":   request.query_params.get("redirect", "http://example.com"),
+        "csrf_token": csrf_token,
     })
 
 
@@ -113,17 +136,26 @@ async def register(
     full_name: Annotated[str, Form()],
     email:     Annotated[str, Form()],
     mac:       Annotated[str, Form()] = "",
+    _csrf:     Annotated[str, Form()] = "",
     db:        AsyncSession = Depends(get_db),
 ):
     cfg = get_config().portal
     ip = request.client.host if request.client else "unknown"
+
+    # CSRF validation
+    if not _csrf or not _csrf_validate(_csrf, ip):
+        return templates.TemplateResponse(request, "portal.html", {
+            "request": request, "mac": mac, "ssid": cfg.guest_ssid,
+            "error": "Invalid form submission. Please reload and try again.",
+            "redirect": "", "csrf_token": _csrf_generate(ip),
+        })
 
     # Rate limit: prevent flooding
     if not check_rate_limit(f"portal:{ip}"):
         return templates.TemplateResponse(request, "portal.html", {
             "request": request, "mac": mac, "ssid": cfg.guest_ssid,
             "error": "Too many registration attempts. Please try again later.",
-            "redirect": "",
+            "redirect": "", "csrf_token": _csrf_generate(ip),
         })
 
     # Basic input validation
@@ -131,19 +163,26 @@ async def register(
         return templates.TemplateResponse(request, "portal.html", {
             "request": request, "mac": mac, "ssid": cfg.guest_ssid,
             "error": "Please enter your full name.",
-            "redirect": "",
+            "redirect": "", "csrf_token": _csrf_generate(ip),
         })
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         return templates.TemplateResponse(request, "portal.html", {
             "request": request, "mac": mac, "ssid": cfg.guest_ssid,
             "error": "Please enter a valid email address.",
-            "redirect": "",
+            "redirect": "", "csrf_token": _csrf_generate(ip),
         })
 
     try:
         norm_mac = normalise_mac(mac) if mac else _get_client_mac(request)
     except ValueError:
         norm_mac = ""
+
+    if not norm_mac:
+        return templates.TemplateResponse(request, "portal.html", {
+            "request": request, "mac": mac, "ssid": cfg.guest_ssid,
+            "error": "Could not determine your device MAC address.",
+            "redirect": "", "csrf_token": _csrf_generate(ip),
+        })
 
     # Expire any existing active sessions for this MAC atomically
     if norm_mac:

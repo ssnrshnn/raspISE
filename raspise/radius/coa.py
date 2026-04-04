@@ -131,6 +131,19 @@ async def send_disconnect_request(
             return {"success": False, "code": 0, "message": "Invalid response (too short)"}
 
         resp_code = data[0]
+        resp_ident = data[1]
+        resp_length = struct.unpack("!H", data[2:4])[0]
+
+        # Validate Response Authenticator per RFC 5176 §3.3:
+        # ResponseAuth = MD5(Code + ID + Length + RequestAuth + Attributes + Secret)
+        resp_auth = data[4:20]
+        req_auth = packet[4:20]  # Request Authenticator we sent
+        verify_payload = data[:4] + req_auth + data[20:resp_length] + secret.encode("utf-8")
+        expected_auth = hashlib.md5(verify_payload).digest()
+        if resp_auth != expected_auth:
+            log.warning("Disconnect response from NAS %s has invalid authenticator — possible spoofing", nas_ip)
+            return {"success": False, "code": resp_code, "message": "Invalid response authenticator"}
+
         if resp_code == DISCONNECT_ACK:
             log.info("Disconnect-ACK from NAS %s for session %s", nas_ip, session_id)
             return {"success": True, "code": DISCONNECT_ACK, "message": "Session disconnected successfully"}

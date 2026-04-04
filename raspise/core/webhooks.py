@@ -39,15 +39,24 @@ async def _dispatch_webhook(
     headers: dict[str, str],
     timeout: float,
 ) -> None:
-    """POST a single event payload to a webhook URL."""
-    try:
-        resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
-        if resp.status_code >= 400:
-            log.warning("Webhook %s returned HTTP %d", url, resp.status_code)
-    except httpx.TimeoutException:
-        log.warning("Webhook %s timed out", url)
-    except Exception as exc:
-        log.warning("Webhook %s error: %s", url, exc)
+    """POST a single event payload to a webhook URL with retry + backoff."""
+    max_retries = 3
+    backoff = 1.0
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
+            if resp.status_code < 500:
+                if resp.status_code >= 400:
+                    log.warning("Webhook %s returned HTTP %d", url, resp.status_code)
+                return  # success or client error (no retry)
+            log.warning("Webhook %s returned HTTP %d (attempt %d/%d)", url, resp.status_code, attempt, max_retries)
+        except httpx.TimeoutException:
+            log.warning("Webhook %s timed out (attempt %d/%d)", url, attempt, max_retries)
+        except Exception as exc:
+            log.warning("Webhook %s error (attempt %d/%d): %s", url, attempt, max_retries, exc)
+        if attempt < max_retries:
+            await asyncio.sleep(backoff)
+            backoff *= 2
 
 
 def _event_to_payload(event: Event) -> dict[str, Any]:

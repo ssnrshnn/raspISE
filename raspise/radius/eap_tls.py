@@ -81,6 +81,7 @@ class _EapTlsSession:
     in_bio: ssl.MemoryBIO = field(default_factory=ssl.MemoryBIO)
     out_bio: ssl.MemoryBIO = field(default_factory=ssl.MemoryBIO)
     handshake_done: bool = False
+    pending_accept: bool = False  # TLS done, waiting for client ACK
     peer_cn: str = ""
     created: float = field(default_factory=time.monotonic)
 
@@ -272,6 +273,13 @@ def _process_tls_data(
 ) -> tuple[str, list[bytes], bytes | None, str]:
     """Drive the OpenSSL handshake with incoming TLS data."""
 
+    # Client ACK after we sent the TLS Finished data — complete the exchange
+    if sess.pending_accept:
+        peer_cn = sess.peer_cn
+        _del_session(nas_ip, username)
+        success = build_eap(EAP_SUCCESS, (ident + 1) & 0xFF)
+        return "accept", fragment_eap_messages(success), None, peer_cn
+
     # Parse EAP-TLS flags
     if not type_data:
         _del_session(nas_ip, username)
@@ -340,24 +348,17 @@ def _process_tls_data(
                         break
         sess.peer_cn = peer_cn
 
-        # Send final TLS data (if any) + EAP-Success
-        _del_session(nas_ip, username)
-
         if out_data:
-            # Send remaining TLS data as a challenge, then EAP-Success
+            # Server has TLS Finished data to send — deliver it as a
+            # challenge and wait for the client's empty ACK before
+            # sending EAP-Success in the next round-trip.
+            sess.pending_accept = True
             sess.eap_id = (ident + 1) & 0xFF
-            eap_pkt = _build_tls_fragment(sess.eap_id, out_data, 0, len(out_data))
-            # We need one more round-trip: send TLS finish data,
-            # then on the client's ACK we send EAP-Success
-            # For simplicity, send EAP-Success in the same packet
-            success = build_eap(EAP_SUCCESS, (sess.eap_id + 1) & 0xFF)
-            # Actually, many RADIUS implementations send the last TLS
-            # message + EAP-Success together in the Access-Accept.
-            # Let's do that: include the TLS data in an Access-Accept.
-            chunks = fragment_eap_messages(eap_pkt)
-            # Return accept with TLS payload
-            return "accept", chunks, None, peer_cn
+            eap_pkt = _build_tls_fragment(sess.eap_id, out_data, len(out_data))
+            return "challenge", fragment_eap_messages(eap_pkt), sess.state_token, ""
 
+        # No remaining TLS data — send EAP-Success immediately
+        _del_session(nas_ip, username)
         success = build_eap(EAP_SUCCESS, (ident + 1) & 0xFF)
         return "accept", fragment_eap_messages(success), None, peer_cn
 

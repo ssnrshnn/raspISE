@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from enum import Enum as PyEnum
 
 from sqlalchemy import (
-    Boolean, DateTime, Enum, ForeignKey, Integer, String, Text,
+    Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, Text,
     func, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -162,6 +162,10 @@ class Policy(Base):
     )
 
     group: Mapped["Group | None"] = relationship("Group", back_populates="policies")
+
+    __table_args__ = (
+        CheckConstraint("vlan IS NULL OR (vlan >= 1 AND vlan <= 4094)", name="ck_policy_vlan_range"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +334,10 @@ class VlanMapping(Base):
     description: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("vlan_id >= 1 AND vlan_id <= 4094", name="ck_vlan_mapping_range"),
     )
 
 

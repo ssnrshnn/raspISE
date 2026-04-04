@@ -70,9 +70,6 @@ _start_time: float = time.monotonic()
 
 # ── Event handler ─────────────────────────────────────────────────────────────
 
-_EVENT_MAP: dict[EventType, callable] = {}
-
-
 def _handle_event(event: Event) -> None:
     match event.type:
         case EventType.AUTH_SUCCESS:
@@ -84,7 +81,8 @@ def _handle_event(event: Event) -> None:
         case EventType.SESSION_START:
             active_sessions.inc()
         case EventType.SESSION_STOP:
-            active_sessions.dec()
+            if active_sessions.get() > 0:
+                active_sessions.dec()
         case EventType.NEW_DEVICE:
             new_devices.inc()
         case EventType.TACACS_AUTH:
