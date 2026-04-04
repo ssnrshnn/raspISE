@@ -86,14 +86,17 @@ async def _audit(
     resource_id: str = "",
     detail: str = "",
 ) -> None:
-    """Record an admin audit log entry."""
-    db.add(AdminAuditLog(
-        admin_username=admin.username,
-        action=action,
-        resource_type=resource_type,
-        resource_id=str(resource_id),
-        detail=detail[:1024],
-    ))
+    """Record an admin audit log entry (best-effort)."""
+    try:
+        db.add(AdminAuditLog(
+            admin_username=admin.username,
+            action=action,
+            resource_type=resource_type,
+            resource_id=str(resource_id),
+            detail=detail[:1024],
+        ))
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

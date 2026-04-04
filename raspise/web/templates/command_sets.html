@@ -31,7 +31,7 @@
           </td>
           <td class="text-end">
             <button class="btn btn-sm btn-outline-info me-1"
-                    onclick="editCs({{ cs.id }}, {{ cs|tojson }})">
+                    onclick='editCs({{ cs.id }}, {"name":{{ cs.name|tojson }},"description":{{ cs.description|tojson }},"rules":[{% for r in cs.rules %}{"priority":{{ r.priority }},"action":{{ r.action.value|default(r.action)|tojson }},"command_pattern":{{ r.command_pattern|tojson }},"args_pattern":{{ r.args_pattern|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]})'>
               <i class="bi bi-pencil"></i>
             </button>
             <button class="btn btn-sm btn-outline-danger"

@@ -35,6 +35,7 @@ log = get_logger(__name__)
 # even though _lifespan is shared across 3 concurrent uvicorn apps.
 _services_started = False
 _services_lock = threading.Lock()
+_init_done = asyncio.Event()
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +298,11 @@ async def _lifespan(_app):
         log.info("Admin UI  → http://localhost:%d", cfg.web.port)
         log.info("REST API  → http://localhost:%d/api/v1/docs", cfg.api.port)
         log.info("Portal    → http://localhost:%d", cfg.portal.port)
+
+        _init_done.set()
+    else:
+        # Wait for the first app to finish DB init before serving requests
+        await _init_done.wait()
 
     yield
 

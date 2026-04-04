@@ -1297,13 +1297,20 @@ async def api_proxy(path: str, request: Request):
         "Content-Type":  request.headers.get("Content-Type", "application/json"),
     }
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.request(
-            method  = request.method,
-            url     = api_url,
-            params  = params,
-            content = body,
-            headers = headers,
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.request(
+                method  = request.method,
+                url     = api_url,
+                params  = params,
+                content = body,
+                headers = headers,
+            )
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        return Response(
+            content='{"detail":"API backend unavailable"}',
+            status_code=502,
+            media_type="application/json",
         )
 
     return Response(
